@@ -65,9 +65,9 @@ describe("Indexer Database", () => {
       const rows = testDb
         .prepare("SELECT version FROM schema_migrations")
         .all();
-      // Still exactly 2 unique versions
+      // Still exactly 3 unique versions (v1, v2, v3 nullable timestamp)
       const versions = [...new Set((rows as any[]).map((r) => r.version))];
-      expect(versions.length).toBe(2);
+      expect(versions.length).toBe(3);
     });
   });
 
