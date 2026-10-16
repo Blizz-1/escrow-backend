@@ -12,6 +12,7 @@
  */
 
 import { parseIntegerInput } from "./digit-limit-validator.js";
+import { divRound } from "./rounding.js";
 
 export const FINANCIAL_REPORT_MATH_ERRORS = {
   INVALID_AMOUNT: "FRM_INVALID_AMOUNT",
@@ -55,15 +56,9 @@ export function parseMinorAmount(
   return { ok: true, value: parsed.value };
 }
 
-/** Divide with round-half-to-even, for non-negative operands. */
+/** Divide with round-half-to-even (issue #670: delegates to unified rounding). */
 export function divideHalfEven(numerator: bigint, denominator: bigint): bigint {
-  const quotient = numerator / denominator;
-  const remainder = numerator % denominator;
-  const twiceRemainder = remainder * 2n;
-
-  if (twiceRemainder > denominator) return quotient + 1n;
-  if (twiceRemainder === denominator && quotient % 2n !== 0n) return quotient + 1n;
-  return quotient;
+  return divRound(numerator, denominator, "half-even");
 }
 
 /** Sum a list of minor-unit amounts, validating every entry first. */
@@ -272,3 +267,4 @@ export function reconcileTotals(reported: {
     balanced: credits.value - debits.value === net.value,
   };
 }
+
