@@ -4,7 +4,7 @@ import {
   MAX_SAFE_DIGITS,
 } from "../src/utils/digit-limit-validator.js";
 import { MAX_SAFE_DIGITS as AUDIT_MAX } from "../src/utils/audit_ledger_sum_checker.js";
-import { MAX_SAFE_DIGITS as SCRAPER_MAX } from "../src/utils/conversion_rate_scraper.js";
+import { MAX_SAFE_DIGITS as MATH_MAX } from "../src/utils/conversion_rate_math.js";
 import { MAX_SAFE_DIGITS as ESTIMATOR_MAX } from "../src/utils/interest_yield_estimator.js";
 import { MAX_SAFE_DIGITS as REFUND_MAX } from "../src/utils/refund_ratio_helper.js";
 
@@ -16,7 +16,7 @@ describe("digit-limit-validator shared module (#530)", () => {
 
     it("is re-exported unchanged by all four callers", () => {
       expect(AUDIT_MAX).toBe(MAX_SAFE_DIGITS);
-      expect(SCRAPER_MAX).toBe(MAX_SAFE_DIGITS);
+      expect(MATH_MAX).toBe(MAX_SAFE_DIGITS);
       expect(ESTIMATOR_MAX).toBe(MAX_SAFE_DIGITS);
       expect(REFUND_MAX).toBe(MAX_SAFE_DIGITS);
     });

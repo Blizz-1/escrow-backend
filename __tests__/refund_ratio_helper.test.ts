@@ -7,7 +7,7 @@ import {
   validateRefundAmount,
   applyRefundRatio,
 } from "../src/utils/refund_ratio_helper.js";
-import { validateErrorStructure } from "../src/utils/conversion_rate_scraper.js";
+import { validateErrorStructure } from "../src/utils/conversion_rate_math.js";
 
 describe("refund_ratio_helper validation and calculations", () => {
   function expectDefinedError(

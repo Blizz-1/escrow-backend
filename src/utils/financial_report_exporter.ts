@@ -480,7 +480,7 @@ export async function writeFinancialReportFile(
 // Stellar token types: unknown asset tickers resolve to a default format
 // configuration instead of throwing, so a novel token never blocks a report.
 //
-// Design follows `conversion_rate_scraper.ts` (ticker registry + typed
+// Design follows `conversion_rate_math.ts` (ticker registry + typed
 // `{ known }` fallback) and the DB-precision vocabulary used by
 // `partial-payment-allocator.ts`.
 

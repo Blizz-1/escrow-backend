@@ -17,13 +17,13 @@ import {
   validateCalculationParameters,
   safeApplyConversionRateWithValidation,
   type ErrorDefinition,
-} from "../src/utils/conversion_rate_scraper.js";
+} from "../src/utils/conversion_rate_math.js";
 
 // ---------------------------------------------------------------------------
 // Existing overflow validation tests
 // ---------------------------------------------------------------------------
 
-describe("conversion_rate_scraper overflow validation", () => {
+describe("conversion_rate_math overflow validation", () => {
   describe("validateConversionRate", () => {
     it("accepts rates within the digit limit", () => {
       const result = validateConversionRate("1000000");
@@ -118,7 +118,7 @@ describe("conversion_rate_scraper overflow validation", () => {
 // TASK 1 – Rate limiting
 // ---------------------------------------------------------------------------
 
-describe("conversion_rate_scraper rate limiting", () => {
+describe("conversion_rate_math rate limiting", () => {
   beforeEach(() => {
     resetConversionRateLimitBuckets();
     // Use a tiny window so tests run quickly
@@ -222,7 +222,7 @@ describe("conversion_rate_scraper rate limiting", () => {
 // TASK 2 – CSV format exporters
 // ---------------------------------------------------------------------------
 
-describe("conversion_rate_scraper CSV exporters", () => {
+describe("conversion_rate_math CSV exporters", () => {
   describe("exportConversionRatesToCsv", () => {
     it("exports valid rows to CSV with correct headers and values", () => {
       const result = exportConversionRatesToCsv([
@@ -383,7 +383,7 @@ describe("conversion_rate_scraper CSV exporters", () => {
 // TASK 3 – Split-sum assertions
 // ---------------------------------------------------------------------------
 
-describe("conversion_rate_scraper split-sum assertions", () => {
+describe("conversion_rate_math split-sum assertions", () => {
   describe("assertConversionSplitSum", () => {
     it("confirms matching splits", () => {
       const result = assertConversionSplitSum(["30", "70"], "100");
@@ -473,7 +473,7 @@ describe("conversion_rate_scraper split-sum assertions", () => {
   });
 });
 
-describe("conversion_rate_scraper error structure validation", () => {
+describe("conversion_rate_math error structure validation", () => {
   describe("validateErrorStructure - parameter error structure validation", () => {
     const sampleDefinitions: ErrorDefinition[] = [
       {

@@ -1,7 +1,11 @@
 /**
- * Oracle conversion-rate scraper helpers with overflow / digit-limit validation,
+ * Pure conversion-rate math helpers with overflow / digit-limit validation,
  * round-half-to-even rounding, unknown asset ticker fallbacks, and DB-column
  * precision formatting.
+ *
+ * This module performs no I/O: it never fetches rates from an oracle or
+ * network. Callers supply rates they already hold. (Renamed from
+ * `conversion_rate_scraper`, which implied a fetch that never existed.)
  *
  * ## Design notes
  *
