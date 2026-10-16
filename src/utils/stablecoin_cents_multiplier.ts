@@ -16,6 +16,8 @@ export const CENTS_PER_UNIT = 100;
 /** Number of decimal places for stablecoin cents precision. */
 export const CENTS_DECIMALS = 2;
 
+import { divRound } from "./rounding.js";
+
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "CENTS_EXCESSIVE_DIGITS",
   INVALID_AMOUNT: "CENTS_INVALID_AMOUNT",
@@ -338,59 +340,8 @@ function roundIntegerDivision(
   divisor: bigint,
   mode: RoundingPolicy
 ): bigint {
-  let N = numerator;
-  let D = divisor;
-
-  if (D < 0n) {
-    N = -N;
-    D = -D;
-  }
-
-  const q = N / D;
-  const r = N % D;
-
-  if (r === 0n) {
-    return q;
-  }
-
-  const sign = N >= 0n ? 1n : -1n;
-  const absR = r >= 0n ? r : -r;
-  const twiceR = 2n * absR;
-
-  if (mode === "truncate") {
-    return q;
-  }
-
-  if (mode === "ceil") {
-    return N > 0n ? q + 1n : q;
-  }
-
-  if (mode === "half-up") {
-    if (twiceR >= D) {
-      return q + sign;
-    }
-    return q;
-  }
-
-  // mode is "half-even" or "round-to-nearest-even" (default)
-  // Tie-breaking rule for Banker's Rounding / Round-to-Nearest-Even:
-  // - If twice the remainder is strictly less than divisor: round towards 0 (keep q).
-  // - If twice the remainder is strictly greater than divisor: round away from 0 (q + sign).
-  // - If twice the remainder equals divisor (exact half):
-  //     - If q is even (q % 2n === 0n): keep q.
-  //     - If q is odd (q % 2n !== 0n): round to nearest even (q + sign).
-  if (twiceR < D) {
-    return q;
-  } else if (twiceR > D) {
-    return q + sign;
-  } else {
-    // Exact halfway tie
-    if (q % 2n === 0n) {
-      return q;
-    } else {
-      return q + sign;
-    }
-  }
+  // Issue #670: unified rounding.
+  return divRound(numerator, divisor, mode);
 }
 
 /**
@@ -593,3 +544,4 @@ export function toCents(
 
   return { ok: true, value: BigInt(combined) };
 }
+
