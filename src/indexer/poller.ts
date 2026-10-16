@@ -15,6 +15,28 @@ const RPC_URL =
 const server = new Server(RPC_URL);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "15000", 10);
 
+/**
+ * Resolve an RPC event's close time to epoch seconds.
+ *
+ * Missing or unparseable `ledgerClosedAt` yields `null` (stored as NULL by
+ * migration v3) — never the wall-clock time, so backfills can't stamp old
+ * events with today's date, and invalid strings can't become NaN (#708).
+ */
+export function toEventTimestamp(ledgerClosedAt: unknown): number | null {
+  if (typeof ledgerClosedAt !== "string" || ledgerClosedAt.trim() === "") {
+    logger.warn("Indexer event missing ledgerClosedAt – storing NULL timestamp");
+    return null;
+  }
+  const millis = new Date(ledgerClosedAt).getTime();
+  if (!Number.isFinite(millis)) {
+    logger.warn("Indexer event has invalid ledgerClosedAt – storing NULL timestamp", {
+      ledgerClosedAt,
+    });
+    return null;
+  }
+  return Math.floor(millis / 1000);
+}
+
 const EVENT_TYPES = [
   "initialized",
   "funded",
@@ -76,9 +98,7 @@ export async function pollEvents() {
       contractId: event.contractId?.contractId() ?? contractIds[0],
       eventType: scValToNative(event.topic[0]) as string,
       ledgerSequence: event.ledger,
-      timestamp: event.ledgerClosedAt
-        ? Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000)
-        : Math.floor(Date.now() / 1000),
+      timestamp: toEventTimestamp(event.ledgerClosedAt),
       dataJson: JSON.stringify(event.value),
     }));
 

@@ -95,6 +95,28 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 3,
+    description: "make events.timestamp nullable for missing ledger close times",
+    up: `
+      CREATE TABLE events_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        ledger_sequence INTEGER NOT NULL,
+        timestamp INTEGER,
+        data_json TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(contract_id, ledger_sequence, event_type)
+      );
+      INSERT INTO events_new
+        (id, contract_id, event_type, ledger_sequence, timestamp, data_json, created_at)
+        SELECT id, contract_id, event_type, ledger_sequence, timestamp, data_json, created_at
+        FROM events;
+      DROP TABLE events;
+      ALTER TABLE events_new RENAME TO events;
+    `,
+  },
 ];
 
 /**
@@ -244,7 +266,7 @@ export function insertEvent(
   contractId: string,
   eventType: string,
   ledgerSequence: number,
-  timestamp: number,
+  timestamp: number | null,
   dataJson: string
 ): boolean {
   const db = getDb();
@@ -301,7 +323,8 @@ export interface EventRow {
   contractId: string;
   eventType: string;
   ledgerSequence: number;
-  timestamp: number;
+  /** Ledger close time (epoch secs), or null when the RPC gave none. */
+  timestamp: number | null;
   dataJson: string;
 }
 
@@ -359,7 +382,7 @@ export interface JobSummary {
   milestone_count: number;
   latest_event_type: string;
   latest_ledger: number;
-  latest_timestamp: number;
+  latest_timestamp: number | null;
 }
 
 export interface PaginatedJobs {
@@ -504,7 +527,7 @@ export interface EventDbRow {
   contract_id: string;
   event_type: string;
   ledger_sequence: number;
-  timestamp: number;
+  timestamp: number | null;
   data_json: string;
   created_at: string;
 }
