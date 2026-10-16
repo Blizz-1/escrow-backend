@@ -1,5 +1,6 @@
 import { getDb, getLastIndexedLedger, insertEvent, type EventRow } from "./db.js";
 import logger from "../utils/logger.js";
+import { FailureMonitor } from "./failure-monitor.js";
 
 // ---------------------------------------------------------------------------
 // RPC retry backoff for ledger-range-tracker (#Task1)
@@ -789,13 +790,8 @@ export function resetLedgerRangeLocks(): void {
 // Consecutive failure / stall alerting (#298)
 // ---------------------------------------------------------------------------
 
-export class LedgerRangeFailureMonitor {
+export class LedgerRangeFailureMonitor extends FailureMonitor {
   readonly tracker: string;
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
 
   constructor(
     options: {
@@ -805,73 +801,50 @@ export class LedgerRangeFailureMonitor {
     } = {}
   ) {
     const env = safeEnvConfig();
-    this.tracker = options.name ?? TRACKER_NAME;
-    this.failureThreshold = options.failureThreshold ?? env.failureThreshold;
-    this.stallThresholdMs = options.stallThresholdMs ?? env.stallThresholdMs;
+    super({
+      name: options.name ?? TRACKER_NAME,
+      logComponent: TRACKER_NAME,
+      payloadKey: "tracker",
+      failureThreshold: options.failureThreshold ?? env.failureThreshold,
+      stallThresholdMs: options.stallThresholdMs ?? env.stallThresholdMs,
+      onError: (_failureType, payload) => {
+        logger.error("ledger_range_tracker operation failed", payload);
+      },
+      onAlert: (payload) => {
+        logger.warn(
+          "ledger_range_tracker alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect RPC connectivity, indexer writes, and stall diagnostics; the tracker resumes automatically after the next successful operation.",
+          },
+        );
+      },
+      onRecovery: (hadFailures) => {
+        if (hadFailures) {
+          logger.info("ledger_range_tracker recovered after consecutive failures", {
+            tracker: this.name,
+          });
+        }
+      },
+    });
+    this.tracker = this.name;
   }
 
   getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
+    return super.getConsecutiveFailures();
   }
 
   getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
+    return super.getLastSuccessfulAt();
   }
 
   isAlertActive(): boolean {
-    return this.alertActive;
+    return super.isAlertActive();
   }
 
-  /**
-   * Record a failure. Emits a diagnostic error on every attempt and a warning
-   * alert only when the consecutive-failure threshold is first reached.
-   */
-  recordFailure(
-    failureType: LedgerRangeFailureType,
-    details: {
-      error?: string;
-      startLedger?: number;
-      endLedger?: number;
-    } = {}
-  ): number {
-    this.consecutiveFailures += 1;
-    const payload = {
-      tracker: this.tracker,
-      failureType,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      startLedger: details.startLedger,
-      endLedger: details.endLedger,
-      error: details.error,
-    };
-
-    logger.error("ledger_range_tracker operation failed", payload);
-
-    if (this.consecutiveFailures === this.failureThreshold) {
-      this.alertActive = true;
-      logger.warn(
-        "ledger_range_tracker alert: consecutive failure threshold reached",
-        {
-          ...payload,
-          action:
-            "Inspect RPC connectivity, indexer writes, and stall diagnostics; the tracker resumes automatically after the next successful operation.",
-        }
-      );
-    }
-
-    return this.consecutiveFailures;
-  }
-
-  recordSuccess(): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    if (hadFailures) {
-      logger.info("ledger_range_tracker recovered after consecutive failures", {
-        tracker: this.tracker,
-      });
-    }
-    this.alertActive = false;
+  getFailureThreshold(): number {
+    return super.getFailureThreshold();
   }
 
   /**
@@ -880,13 +853,17 @@ export class LedgerRangeFailureMonitor {
    * successful poll can still recover cleanly. Returns true when stalled.
    */
   checkStall(range?: LedgerRange): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
+    const lastSuccess = this.getLastSuccessfulAt();
+    if (lastSuccess === null) return false;
+    const elapsedMs = Date.now() - lastSuccess;
     if (elapsedMs <= this.stallThresholdMs) return false;
+    if (this.stallAlerted) return true;
+
+    this.stallAlerted = true;
     logger.warn("ledger_range_tracker alert: poller stall threshold reached", {
-      tracker: this.tracker,
+      tracker: this.name,
       failureType: "stall" as const,
-      consecutiveFailures: this.consecutiveFailures,
+      consecutiveFailures: this.getConsecutiveFailures(),
       threshold: this.failureThreshold,
       stallThresholdMs: this.stallThresholdMs,
       elapsedMs,
@@ -899,9 +876,7 @@ export class LedgerRangeFailureMonitor {
   }
 
   reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
+    super.reset();
   }
 }
 

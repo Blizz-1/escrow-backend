@@ -1,5 +1,6 @@
 import logger from "../utils/logger.js";
 import { getDb } from "./db.js";
+import { FailureMonitor } from "./failure-monitor.js";
 
 /**
  * Indexer runner – diagnostics helpers for the main indexer event poller (#252)
@@ -109,39 +110,19 @@ const DEFAULT_RUNNER_STALL_THRESHOLD_MS = 120_000;
  * The alert latches: it fires once per episode rather than on every subsequent
  * failure, so a persistently broken poll loop produces one alert instead of a
  * stream of them. A success clears the latch.
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class IndexerRunnerFailureMonitor {
-  private readonly name: string;
-  private readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
-  private stallAlerted = false;
-
+export class IndexerRunnerFailureMonitor extends FailureMonitor {
   constructor(options: IndexerRunnerFailureMonitorOptions = {}) {
-    this.name = options.name ?? "indexer_runner";
-    this.failureThreshold =
-      options.failureThreshold ?? DEFAULT_RUNNER_FAILURE_THRESHOLD;
-    this.stallThresholdMs =
-      options.stallThresholdMs ?? DEFAULT_RUNNER_STALL_THRESHOLD_MS;
-  }
-
-  getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
-  }
-
-  getFailureThreshold(): number {
-    return this.failureThreshold;
-  }
-
-  getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
-  }
-
-  isAlertActive(): boolean {
-    return this.alertActive;
+    super({
+      name: options.name ?? "indexer_runner",
+      logComponent: "indexer_runner",
+      failureThreshold: options.failureThreshold ?? DEFAULT_RUNNER_FAILURE_THRESHOLD,
+      stallThresholdMs: options.stallThresholdMs ?? DEFAULT_RUNNER_STALL_THRESHOLD_MS,
+      logRecoveryOnSuccess: false,
+    });
   }
 
   recordFailure(
@@ -150,7 +131,10 @@ export class IndexerRunnerFailureMonitor {
   ): number {
     this.consecutiveFailures += 1;
 
-    if (this.consecutiveFailures >= this.failureThreshold && !this.alertActive) {
+    if (
+      this.consecutiveFailures >= this.failureThreshold &&
+      !this.alertActive
+    ) {
       this.alertActive = true;
       logger.warn("indexer_runner alert: consecutive failure threshold reached", {
         runner: this.name,
@@ -165,19 +149,12 @@ export class IndexerRunnerFailureMonitor {
     return this.consecutiveFailures;
   }
 
-  recordSuccess(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    this.alertActive = false;
-    this.stallAlerted = false;
-  }
-
   /** Warn once per episode when nothing has succeeded inside the window. */
-  checkStall(): void {
-    if (this.lastSuccessfulAt === null || this.stallAlerted) return;
+  checkStall(): boolean {
+    if (this.lastSuccessfulAt === null || this.stallAlerted) return false;
 
     const elapsed = Date.now() - this.lastSuccessfulAt;
-    if (elapsed <= this.stallThresholdMs) return;
+    if (elapsed <= this.stallThresholdMs) return false;
 
     this.stallAlerted = true;
     logger.warn("Poller stall detected – no successful poll for threshold period", {
@@ -186,14 +163,7 @@ export class IndexerRunnerFailureMonitor {
       stallThresholdMs: this.stallThresholdMs,
       consecutiveFailures: this.consecutiveFailures,
     });
-  }
-
-  /** Reset in place – callers hold a reference to this instance. */
-  reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
-    this.stallAlerted = false;
+    return true;
   }
 }
 

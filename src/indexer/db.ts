@@ -121,7 +121,9 @@ const MIGRATIONS: Migration[] = [
         contract_id TEXT NOT NULL UNIQUE,
         label TEXT,
         active INTEGER NOT NULL DEFAULT 1,
-        registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_ledger_sequence INTEGER DEFAULT 0,
+        start_ledger INTEGER DEFAULT 0
       );
     `,
   },
@@ -204,6 +206,15 @@ const MIGRATIONS: Migration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_events_contract_event_type
         ON events (contract_id, event_type);
+    `,
+  },
+  {
+    version: 9,
+    description: "per-contract ledger pointers (#720)",
+    up: `
+      ALTER TABLE monitored_contracts ADD COLUMN last_ledger_sequence INTEGER DEFAULT 0;
+
+      ALTER TABLE monitored_contracts ADD COLUMN start_ledger INTEGER DEFAULT 0;
     `,
   },
 ];
@@ -415,6 +426,28 @@ export function runMigrations(
       description: migration.description,
     });
 
+    // Migration 9 adds columns to monitored_contracts. For idempotency when
+    // the table already has the columns (e.g. tests that reset schema_migrations
+    // but not monitored_contracts), skip the ALTER if columns already exist.
+    if (migration.version === 9) {
+      const existingCols = database
+        .prepare("PRAGMA table_info(monitored_contracts)")
+        .all() as Array<{ name: string }>;
+      const colNames = new Set(existingCols.map((c) => c.name));
+      if (
+        colNames.has("last_ledger_sequence") &&
+        colNames.has("start_ledger")
+      ) {
+        database
+          .prepare(
+            "INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
+          )
+          .run(migration.version, migration.description);
+        logger.info("Migration applied", { version: migration.version });
+        continue;
+      }
+    }
+
     // Run migration inside a transaction – rolls back fully on any error
     const applyMigration = database.transaction(() => {
       database.exec(migration.up);
@@ -558,6 +591,8 @@ const EXPECTED_TABLES: Record<string, string[]> = {
     "label",
     "active",
     "registered_at",
+    "last_ledger_sequence",
+    "start_ledger",
   ],
   schema_migrations: ["version", "description", "applied_at"],
 };
@@ -789,17 +824,32 @@ export function setLastIndexedLedger(seq: number) {
  * deregistered. Idempotent - calling this repeatedly for the same
  * contract_id never creates duplicate rows.
  * Wrapped in a transaction so concurrent writes never leave partial state.
+ *
+ * When `startLedger` is provided and the contract is newly registered, it
+ * becomes the contract's `start_ledger` – the ledger from which the contract's
+ * own polling pointer begins. On re-activation of an existing contract, the
+ * existing `start_ledger` is preserved.
  */
-export function registerContract(contractId: string, label?: string): void {
+export function registerContract(
+  contractId: string,
+  label?: string,
+  startLedger?: number,
+): void {
   const db = getDb();
   const tx = db.transaction(() => {
+    const existing = db
+      .prepare("SELECT start_ledger FROM monitored_contracts WHERE contract_id = ?")
+      .get(contractId) as { start_ledger: number } | undefined;
+
+    const start = startLedger !== undefined && !existing ? startLedger : 0;
+
     db.prepare(
-      `INSERT INTO monitored_contracts (contract_id, label, active)
-       VALUES (?, ?, 1)
+      `INSERT INTO monitored_contracts (contract_id, label, active, start_ledger)
+       VALUES (?, ?, 1, ?)
        ON CONFLICT(contract_id) DO UPDATE SET
          active = 1,
-         label = COALESCE(excluded.label, monitored_contracts.label)`
-    ).run(contractId, label ?? null);
+         label = COALESCE(excluded.label, monitored_contracts.label)`,
+    ).run(contractId, label ?? null, start);
   });
   tx();
 }
@@ -828,6 +878,53 @@ export function getActiveContractIds(): string[] {
     .prepare("SELECT contract_id FROM monitored_contracts WHERE active = 1")
     .all() as Array<{ contract_id: string }>;
   return rows.map((row) => row.contract_id);
+}
+
+export interface ActiveContractPointer {
+  contractId: string;
+  lastLedgerSequence: number;
+  startLedger: number;
+}
+
+/**
+ * Returns active contracts with their per-contract ledger pointers.
+ * Contracts whose `last_ledger_sequence` is 0 fall back to the global
+ * `indexer_state.last_ledger_sequence` for legacy single-contract setups.
+ */
+export function getActiveContractsWithPointers(): ActiveContractPointer[] {
+  const db = getDb();
+  const globalLedger = getLastIndexedLedger();
+  const rows = db
+    .prepare(
+      "SELECT contract_id, COALESCE(NULLIF(last_ledger_sequence, 0), ?) AS last_ledger_sequence, start_ledger FROM monitored_contracts WHERE active = 1",
+    )
+    .all(globalLedger) as Array<{
+    contract_id: string;
+    last_ledger_sequence: number;
+    start_ledger: number;
+  }>;
+  return rows.map((row) => ({
+    contractId: row.contract_id,
+    lastLedgerSequence: row.last_ledger_sequence,
+    startLedger: row.start_ledger,
+  }));
+}
+
+/**
+ * Atomically advance a single contract's ledger pointer. Wrapped in a
+ * transaction so concurrent updates never leave partial state.
+ */
+export function updateContractPointer(
+  contractId: string,
+  newLedger: number,
+): void {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare(
+      "UPDATE monitored_contracts SET last_ledger_sequence = ? WHERE contract_id = ?",
+    ).run(newLedger, contractId);
+  });
+  tx();
 }
 
 // ---------------------------------------------------------------------------
@@ -950,11 +1047,11 @@ export function insertEventBatch(events: EventRow[], newLedger: number): void {
 
   batchTransaction();
 
-  logSchemaManagerPollDiagnostics(
-    "insertEventBatch",
-    startedAt,
-    Buffer.byteLength(JSON.stringify(events), "utf8"),
+  const payloadSizeBytes = events.reduce(
+    (sum, ev) => sum + Buffer.byteLength(ev.dataJson, "utf8"),
+    0,
   );
+  logSchemaManagerPollDiagnostics("insertEventBatch", startedAt, payloadSizeBytes);
 }
 
 /**

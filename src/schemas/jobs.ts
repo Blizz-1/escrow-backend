@@ -402,3 +402,25 @@ export type ClaimAutoReleaseBody = z.infer<typeof claimAutoReleaseBodySchema>;
 export type ByWalletParams = z.infer<typeof byWalletParamsSchema>;
 export type ByWalletQuery = z.infer<typeof byWalletQuerySchema>;
 export type CreateJobDraftBody = z.infer<typeof createJobDraftBodySchema>;
+
+/**
+ * Query params: ?amount=<stroops> for GET /:contractId/fee-preview.
+ * Validates `amount` as a positive i128 decimal string (#719).
+ */
+export const feePreviewQuerySchema = z.object({
+  amount: z
+    .string({ required_error: "amount is required" })
+    .refine(
+      (val) => {
+        try {
+          const n = BigInt(val);
+          return n > 0n;
+        } catch {
+          return false;
+        }
+      },
+      { message: "amount must be a positive i128 decimal string" },
+    ),
+});
+
+export type FeePreviewQuery = z.infer<typeof feePreviewQuerySchema>;

@@ -6,6 +6,8 @@ import {
   insertEventBatch,
   insertHistoricalEventBatch,
   getActiveContractIds,
+  getActiveContractsWithPointers,
+  updateContractPointer,
   registerContract,
   adjustPollerInterval,
   getCurrentPollIntervalMs as getDbPollIntervalMs,
@@ -468,58 +470,115 @@ export async function pollEvents(): Promise<boolean> {
       return true;
     }
 
-    const lastLedger = getLastIndexedLedger();
     const currentLedger = (await rpcClient.getLatestLedger()).sequence;
-    if (currentLedger <= lastLedger) {
-      // --- Dynamic throttling: idle cycle (#265, #256) ---
-      adjustPollerInterval(0);
-      adjustIndexerRunnerPollInterval(0);
+
+    // --- Group contracts by their per-contract ledger pointer (#720) ---
+    // Contracts sharing a pointer are polled together in one getEvents call.
+    // A newly registered contract starts from its start_ledger and catches up
+    // separately until it joins the main group. The global pointer remains as
+    // the default for legacy single-contract setups.
+    const contracts = getActiveContractsWithPointers();
+
+    if (contracts.length === 0 && process.env.CONTRACT_ID) {
+      registerContract(process.env.CONTRACT_ID, "default");
+      const fallback = getActiveContractsWithPointers();
+      if (fallback.length > 0) {
+        contracts.push(fallback[0]);
+      }
+    }
+
+    if (contracts.length === 0) {
+      logger.debug("No CONTRACT_IDs configured – skipping indexer poll");
       return false;
     }
 
-    const startLedger = lastLedger + 1;
+    // Group contracts by their lastLedgerSequence so each group makes one
+    // getEvents call. Contracts at pointer 0 fall back to the global pointer.
+    const globalPointer = getLastIndexedLedger();
+    const groups = new Map<number, string[]>();
+    for (const { contractId, lastLedgerSequence } of contracts) {
+      const pointer = lastLedgerSequence || globalPointer;
+      const group = groups.get(pointer) ?? [];
+      group.push(contractId);
+      groups.set(pointer, group);
+    }
 
-    logger.info("Polling events", { startLedger, currentLedger });
+    let totalEvents = 0;
+    let maxStartLedger = 0;
+    const diagnosticsBatch: EventRow[] = [];
+    let anyGroupPolled = false;
 
-    const eventsStart = performance.now();
-    const events = await fetchEventsWithRetry(rpcClient.rpcServer, {
-      startLedger,
-      contractIds,
-      limit: 100,
-    });
-    const eventsElapsed = performance.now() - eventsStart;
+    for (const [pointer, groupContractIds] of groups) {
+      if (currentLedger <= pointer) continue;
+      anyGroupPolled = true;
 
-    // Build the batch to be written atomically (#84)
-    const batch: EventRow[] = events.events.map((event) =>
-      toEventRow(event, contractIds[0])
-    );
+      const startLedger = pointer + 1;
+      maxStartLedger = Math.max(maxStartLedger, startLedger);
 
-    // Persist the batch and advance the ledger pointer atomically (#84).
-    // Concurrent indexer_runner executions share a memory queue lock so their
-    // event inserts are serialized and cannot conflict or duplicate entries (#251).
-    await enqueueEventInsert(batch, currentLedger);
+      logger.info("Polling events for contract group", {
+        startLedger,
+        currentLedger,
+        contractCount: groupContractIds.length,
+      });
 
+      const eventsStart = performance.now();
+      const events = await fetchEventsWithRetry(rpcClient.rpcServer, {
+        startLedger,
+        contractIds: groupContractIds,
+        limit: 100,
+      });
+      const eventsElapsed = performance.now() - eventsStart;
+
+      // Build the batch to be written atomically (#84)
+      const batch: EventRow[] = events.events.map((event) =>
+        toEventRow(event, groupContractIds[0])
+      );
+
+      // Persist the batch and advance the ledger pointer atomically (#84).
+      // Called even with an empty batch so the global pointer always advances.
+      await enqueueEventInsert(batch, currentLedger);
+
+      // Advance each contract in the group to the current ledger (#720).
+      for (const contractId of groupContractIds) {
+        updateContractPointer(contractId, currentLedger);
+      }
+
+      totalEvents += events.events.length;
+      diagnosticsBatch.push(...batch);
+    }
+
+    // Record success for any poll that completes without throwing, even idle cycles.
     const totalElapsed = performance.now() - pollStart;
     failureMonitor.recordSuccess();
 
     // --- Dynamic poller throttling (#265) ---
-    const throttleState = adjustPollerInterval(events.events.length);
-    adjustIndexerRunnerPollInterval(events.events.length);
+    const throttleState = adjustPollerInterval(totalEvents);
+    adjustIndexerRunnerPollInterval(totalEvents);
 
     logger.info("Processed indexer poll", {
-      eventCount: events.events.length,
+      eventCount: totalEvents,
       upToLedger: currentLedger,
       elapsedMs: Math.round(totalElapsed),
       pollIntervalMs: throttleState.currentIntervalMs,
     });
 
-    logPollDiagnostics(performance.now() - pollStartedAt, batch, stallWindow);
+    if (anyGroupPolled) {
+      logPollDiagnostics(
+        performance.now() - pollStartedAt,
+        diagnosticsBatch,
+        stallWindow,
+      );
 
-    deliverWebhooks(startLedger, currentLedger).catch((err) =>
-      logger.error("Error delivering webhooks", {
-        error: formatError(err),
-      })
-    );
+      deliverWebhooks(maxStartLedger || 0, currentLedger).catch((err) =>
+        logger.error("Error delivering webhooks", {
+          error: formatError(err),
+        })
+      );
+    }
+
+    if (!anyGroupPolled) {
+      return false;
+    }
 
     return true;
   } catch (err) {
