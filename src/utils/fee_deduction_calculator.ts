@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { divRound } from "./rounding.js";
 
 /**
  * Fee deduction calculator and fee share calculation checker with
@@ -644,16 +645,8 @@ export function calculateFeeDeductionHalfEven(
   }
 
   const numerator = base.value * rate.value;
-  const quotient = numerator / BPS_DENOMINATOR;
-  const remainder = numerator % BPS_DENOMINATOR;
-
-  let feeAmount = quotient;
-  const twiceRemainder = remainder * 2n;
-  if (twiceRemainder > BPS_DENOMINATOR) {
-    feeAmount += 1n;
-  } else if (twiceRemainder === BPS_DENOMINATOR && quotient % 2n !== 0n) {
-    feeAmount += 1n;
-  }
+  // Issue #670: unified half-even rounding.
+  const feeAmount = divRound(numerator, BPS_DENOMINATOR, "half-even");
 
   const netAmount = base.value - feeAmount;
 
@@ -1289,3 +1282,4 @@ export function readCsvFromFile(
 }
 
 export const parseCsvFromFile = readCsvFromFile;
+
