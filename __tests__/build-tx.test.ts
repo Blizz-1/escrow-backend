@@ -1,6 +1,7 @@
 import { jest } from "@jest/globals";
 import request from "supertest";
 import express from "express";
+import { Keypair } from "@stellar/stellar-sdk";
 
 const mockGetAccount = jest.fn<() => Promise<unknown>>();
 const mockPrepareTransaction = jest.fn<() => Promise<unknown>>();
@@ -29,7 +30,7 @@ app.use("/api/jobs", router);
 
 const VALID_BODY = {
   contractId: "CDD5WKK3WT3QVKXMXTJNDIXE4T73FK6GGXDSD6UTJAH6YYZU52SQ4MUH",
-  method: "fund_job",
+  method: "fund",
   args: [],
   sourceAddress: "GAODBHVR63Z56MVQRBEJSYM2H5423LJ4WAPUUBOFG4JYY72S6ROKVZRX",
 };
@@ -171,4 +172,63 @@ describe("POST /api/jobs/build-tx — request payload schema validation (#101)",
     expect(res.body.success).toBe(false);
     expect(res.body.error).toContain("Expected string, received boolean");
   });
+});
+
+describe("POST /api/jobs/build-tx — contract method allowlist (#709)", () => {
+  beforeEach(() => {
+    mockGetAccount.mockReset();
+    mockPrepareTransaction.mockReset();
+
+    mockGetAccount.mockResolvedValue({
+      accountId: () => VALID_BODY.sourceAddress,
+      sequenceNumber: () => "1",
+      incrementSequenceNumber: () => {},
+    });
+  });
+
+  it("returns 400 for method transfer without any RPC call", async () => {
+    const body = { ...VALID_BODY, method: "transfer" };
+    const res = await request(app).post("/api/jobs/build-tx").send(body).expect(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain("method must be one of:");
+    expect(mockGetAccount).not.toHaveBeenCalled();
+    expect(mockPrepareTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "initialize",
+    "fund",
+    "mark_delivered",
+    "approve_milestone",
+    "approve_partial",
+    "raise_dispute",
+    "resolve_dispute",
+    "claim_auto_release",
+  ])("accepts allowlisted method %s", async (method) => {
+    mockPrepareTransaction.mockResolvedValue({ toXDR: () => "AAAAAQ==" });
+    const res = await request(app)
+      .post("/api/jobs/build-tx")
+      .send({ ...VALID_BODY, method })
+      .expect(200);
+    expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
+  });
+
+  it.each(["add_whitelisted_token", "remove_whitelisted_token"])(
+    "accepts allowlisted whitelist method %s with admin+token args",
+    async (method) => {
+      mockPrepareTransaction.mockResolvedValue({ toXDR: () => "AAAAAQ==" });
+      const res = await request(app)
+        .post("/api/jobs/build-tx")
+        .send({
+          ...VALID_BODY,
+          method,
+          args: [
+            { type: "address", value: VALID_BODY.sourceAddress },
+            { type: "address", value: Keypair.random().publicKey() },
+          ],
+        })
+        .expect(200);
+      expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
+    },
+  );
 });
