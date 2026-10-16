@@ -380,7 +380,9 @@ export interface PaginatedJobs {
  * The query:
  *   1. Filters rows where json_extract finds the address in client / freelancer
  *      / arbiter fields (exact match – no false-positive LIKE hits).
- *   2. Keeps only the most-recent event per contract_id (via MAX ledger subquery).
+ *   2. Keeps exactly one row per contract_id: the most-recent event by
+ *      (ledger_sequence DESC, id DESC) via ROW_NUMBER, so contracts with
+ *      several events in their latest ledger never duplicate a job.
  *   3. Determines role with a CASE expression in SQL.
  *   4. Applies LIMIT / OFFSET inside the engine, so memory footprint is O(page).
  */
@@ -437,19 +439,20 @@ export async function getJobsByWallet(
              ELSE 'unknown'
            END                                              AS role,
            e.data_json
-         FROM events e
-         INNER JOIN (
-           SELECT contract_id, MAX(ledger_sequence) AS max_ledger
-           FROM events
-           WHERE json_extract(data_json, '$.client')     = ?
-              OR json_extract(data_json, '$.freelancer') = ?
-              OR json_extract(data_json, '$.arbiter')    = ?
-           GROUP BY contract_id
-         ) latest
-          ON e.contract_id    = latest.contract_id
-           AND e.ledger_sequence = latest.max_ledger
-          ORDER BY e.ledger_sequence DESC, e.contract_id ASC
-          LIMIT ? OFFSET ?`
+         FROM (
+           SELECT e.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY e.contract_id
+               ORDER BY e.ledger_sequence DESC, e.id DESC
+             ) AS rn
+           FROM events e
+           WHERE json_extract(e.data_json, '$.client')     = ?
+              OR json_extract(e.data_json, '$.freelancer') = ?
+              OR json_extract(e.data_json, '$.arbiter')    = ?
+         ) e
+         WHERE e.rn = 1
+         ORDER BY e.ledger_sequence DESC, e.contract_id ASC
+         LIMIT ? OFFSET ?`
       )
       .all(
         address, address, address,
