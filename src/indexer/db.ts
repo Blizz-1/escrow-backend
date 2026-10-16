@@ -446,10 +446,10 @@ export async function getJobsByWallet(
               OR json_extract(data_json, '$.arbiter')    = ?
            GROUP BY contract_id
          ) latest
-           ON e.contract_id    = latest.contract_id
-          AND e.ledger_sequence = latest.max_ledger
-         ORDER BY e.ledger_sequence DESC
-         LIMIT ? OFFSET ?`
+          ON e.contract_id    = latest.contract_id
+           AND e.ledger_sequence = latest.max_ledger
+          ORDER BY e.ledger_sequence DESC, e.contract_id ASC
+          LIMIT ? OFFSET ?`
       )
       .all(
         address, address, address,
@@ -534,7 +534,7 @@ export function getEventsByContract(
     .prepare(
       `SELECT * FROM events
        WHERE contract_id = ?
-       ORDER BY ledger_sequence ASC
+       ORDER BY ledger_sequence ASC, id ASC
        LIMIT ? OFFSET ?`
     )
     .all(contractId, safeLimit, offset) as EventDbRow[];

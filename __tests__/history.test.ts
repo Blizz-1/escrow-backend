@@ -130,6 +130,23 @@ describe("getEventsByContract() – unit", () => {
     expect(p.total).toBe(5);
     expect(p.events).toHaveLength(0);
   });
+
+  it("pagination: 25 events in the same ledger return each event exactly once across 3 pages (#706)", () => {
+    for (let i = 1; i <= 25; i++) {
+      insertEvent(CONTRACT_A, `event${i}`, 100, i, JSON.stringify({ i }));
+    }
+
+    const seen = new Set<number>();
+    for (let page = 1; page <= 3; page++) {
+      const p = getEventsByContract(CONTRACT_A, page, 10);
+      expect(p.total).toBe(25);
+      for (const e of p.events) {
+        expect(seen.has(e.id)).toBe(false);
+        seen.add(e.id);
+      }
+    }
+    expect(seen.size).toBe(25);
+  });
 });
 
 // ---------------------------------------------------------------------------
