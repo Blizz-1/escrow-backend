@@ -227,48 +227,41 @@ describe("POST /api/jobs/:contractId/whitelist/update", () => {
     });
   });
 
-  describe("Authorization and 401 handling", () => {
-    it("returns 401 when API key is required but missing", async () => {
+  // No API key is required (#693): the caller's wallet signature is the
+  // authorization, and the browser cannot hold a secret.
+  describe("API key not required (#693)", () => {
+    it("accepts the request when API_KEY is set but no key is sent", async () => {
       process.env.API_KEY = "secret-key";
 
       const res = await request(buildApp())
         .post(`/api/jobs/${VALID_CONTRACT}/whitelist/update`)
         .send({ addresses: [VALID_STELLAR_ADDRESS_1] })
-        .expect(401);
+        .expect(200);
 
-      expect(res.body).toEqual({
-        success: false,
-        error: "Unauthorized",
-      });
+      expect(res.body.success).toBe(true);
     });
 
-    it("returns 401 when provided API key is invalid", async () => {
+    it("ignores a wrong x-api-key header instead of rejecting it", async () => {
       process.env.API_KEY = "secret-key";
 
       const res = await request(buildApp())
         .post(`/api/jobs/${VALID_CONTRACT}/whitelist/update`)
         .set("x-api-key", "wrong-key")
         .send({ addresses: [VALID_STELLAR_ADDRESS_1] })
-        .expect(401);
+        .expect(200);
 
-      expect(res.body).toEqual({
-        success: false,
-        error: "Unauthorized",
-      });
+      expect(res.body.success).toBe(true);
     });
 
-    it("returns 401 (fails closed) when API_KEY is not set", async () => {
+    it("accepts the request when API_KEY is not set at all", async () => {
       delete process.env.API_KEY;
 
       const res = await request(buildApp())
         .post(`/api/jobs/${VALID_CONTRACT}/whitelist/update`)
         .send({ addresses: [VALID_STELLAR_ADDRESS_1] })
-        .expect(401);
+        .expect(200);
 
-      expect(res.body).toEqual({
-        success: false,
-        error: "Unauthorized",
-      });
+      expect(res.body.success).toBe(true);
     });
 
     it("accepts request when valid API key is provided", async () => {

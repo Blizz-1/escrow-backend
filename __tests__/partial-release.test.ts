@@ -333,8 +333,17 @@ describe("POST /api/jobs/:contractId/milestones/:index/partial-release", () => {
     });
   });
 
-  it("returns 500 when getAccount throws a generic internal error", async () => {
+  it("returns 504 when getAccount times out upstream (#691)", async () => {
     mockGetAccount.mockRejectedValue(new Error("Database connection timeout"));
+    const res = await request(buildApp())
+      .post(ENDPOINT)
+      .send(VALID_BODY)
+      .expect(504);
+    expect(res.body).toEqual({ success: false, error: "Upstream RPC timeout" });
+  });
+
+  it("returns 500 when getAccount throws a generic internal error", async () => {
+    mockGetAccount.mockRejectedValue(new Error("Unexpected internal failure"));
     const res = await request(buildApp())
       .post(ENDPOINT)
       .send(VALID_BODY)
@@ -357,8 +366,17 @@ describe("POST /api/jobs/:contractId/milestones/:index/partial-release", () => {
     });
   });
 
+  it("returns 504 when prepareTransaction times out upstream (#691)", async () => {
+    mockPrepareTransaction.mockRejectedValue(new Error("socket hang up"));
+    const res = await request(buildApp())
+      .post(ENDPOINT)
+      .send(VALID_BODY)
+      .expect(504);
+    expect(res.body).toEqual({ success: false, error: "Upstream RPC timeout" });
+  });
+
   it("returns 500 when prepareTransaction throws a generic internal error", async () => {
-    mockPrepareTransaction.mockRejectedValue(new Error("Database connection timeout"));
+    mockPrepareTransaction.mockRejectedValue(new Error("Unexpected internal failure"));
     const res = await request(buildApp())
       .post(ENDPOINT)
       .send(VALID_BODY)
@@ -369,9 +387,11 @@ describe("POST /api/jobs/:contractId/milestones/:index/partial-release", () => {
     });
   });
 
-  // ── API_KEY gate ──────────────────────────────────────────────────────────
+  // ── API key not required (#693) ───────────────────────────────────────────
+  // The route only builds an unsigned XDR the caller's own wallet must sign,
+  // so it is deliberately public: a browser cannot hold a secret key.
 
-  describe("API_KEY gate", () => {
+  describe("API key not required (#693)", () => {
     const originalApiKey = process.env.API_KEY;
 
     beforeEach(() => {
@@ -387,21 +407,21 @@ describe("POST /api/jobs/:contractId/milestones/:index/partial-release", () => {
       }
     });
 
-    it("returns 401 when API_KEY is set and no key is provided", async () => {
+    it("returns 200 when API_KEY is set and no key is provided", async () => {
       const res = await request(buildApp())
         .post(ENDPOINT)
         .send(VALID_BODY)
-        .expect(401);
-      expect(res.body).toEqual({ success: false, error: "Unauthorized" });
+        .expect(200);
+      expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
     });
 
-    it("returns 401 when API_KEY is set and wrong key is provided", async () => {
+    it("ignores a wrong x-api-key header instead of rejecting it", async () => {
       const res = await request(buildApp())
         .post(ENDPOINT)
         .set("x-api-key", "wrong-key")
         .send(VALID_BODY)
-        .expect(401);
-      expect(res.body).toEqual({ success: false, error: "Unauthorized" });
+        .expect(200);
+      expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
     });
 
     it("returns 200 when API_KEY is set and correct key is provided", async () => {
@@ -413,13 +433,13 @@ describe("POST /api/jobs/:contractId/milestones/:index/partial-release", () => {
       expect(res.body.success).toBe(true);
     });
 
-    it("returns 401 (fails closed) when API_KEY is not set", async () => {
+    it("returns 200 when API_KEY is not configured at all", async () => {
       delete process.env.API_KEY;
       const res = await request(buildApp())
         .post(ENDPOINT)
         .send(VALID_BODY)
-        .expect(401);
-      expect(res.body).toEqual({ success: false, error: "Unauthorized" });
+        .expect(200);
+      expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
     });
   });
 

@@ -15,7 +15,7 @@ jest.unstable_mockModule("@stellar/stellar-sdk/rpc", () => ({
   },
 }));
 
-const { default: router } = await import("../src/routes/jobs.js");
+const { default: router, resetTimeRemainingCache } = await import("../src/routes/jobs.js");
 const { resetTimeRemainingRateLimitBuckets } = await import(
   "../src/middleware/job-contract-rate-limit.js"
 );
@@ -58,15 +58,19 @@ describe("GET /api/jobs/:contractId/milestones/:index/time-remaining", () => {
     expect(mockSimulateTransaction).toHaveBeenCalled();
   });
 
-  it("returns 401 (fails closed) when API_KEY is not set", async () => {
+  // Public on-chain read: no API key is required, even when none is
+  // configured, because a browser cannot hold one (#693).
+  it("returns 200 without an API key when API_KEY is not set", async () => {
+    resetTimeRemainingCache();
     delete process.env.API_KEY;
+    mockSimulateTransaction.mockResolvedValue({ result: { retval: 120 } });
 
     const res = await request(buildApp())
       .get(`/api/jobs/${VALID_CONTRACT}/milestones/0/time-remaining`)
-      .expect(401);
+      .expect(200);
 
-    expect(res.body).toEqual({ success: false, error: "Unauthorized" });
-    expect(mockSimulateTransaction).not.toHaveBeenCalled();
+    expect(res.body).toEqual({ success: true, data: { secondsRemaining: 120 } });
+    expect(mockSimulateTransaction).toHaveBeenCalled();
   });
 
   // 2. Invalid contractId
