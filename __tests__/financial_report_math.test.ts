@@ -11,6 +11,9 @@ import {
   sumAmounts,
 } from "../src/utils/financial_report_math.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+
 // Amounts are 7-decimal minor units (stroops) unless stated otherwise.
 // Every expected value below was derived by hand from the integer arithmetic,
 // so these assertions pin the exporter's documented calculation outcomes.
@@ -35,7 +38,7 @@ describe("financial_report_math", () => {
     });
 
     it("rejects values beyond the 15-digit limit", () => {
-      expect(parseMinorAmount("1" + "0".repeat(15)).ok).toBe(false);
+      expect(parseMinorAmount(OVER_I128).ok).toBe(false);
     });
   });
 

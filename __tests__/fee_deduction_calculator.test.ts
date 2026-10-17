@@ -14,6 +14,11 @@ import {
   checkFeeShareCalculation,
 } from "../src/utils/fee_deduction_calculator.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
+
 describe("fee_deduction_calculator overflow validation", () => {
   describe("validateAmount and validateFeeAmount", () => {
     it("accepts values within the digit limit", () => {
@@ -31,12 +36,12 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("rejects excessive digits with EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateAmount(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -67,12 +72,12 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("rejects excessive digits in fee rate with EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateFeeRate(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -143,29 +148,29 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("rejects excessive digits on gross amount", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = calculateFeeDeduction(tooBig, 500);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("rejects excessive digits on fee rate", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = calculateFeeDeduction(10_000, tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("rejects excessive digits on scale with EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = calculateFeeDeduction(10_000, 500, tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -248,21 +253,23 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("rejects a total fee with excessive digits, propagating EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = calculateFeeShares(tooBig, [1, 1]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
-    it("blocks an allocation whose intermediate multiplication would overflow", () => {
-      const hugeTotal = "9".repeat(MAX_SAFE_DIGITS);
+    // bigint intermediates cannot overflow, so a large total splits exactly
+    // instead of being rejected (#698).
+    it("splits a total far beyond the old 15-digit cap exactly", () => {
+      const hugeTotal = I128_MAX;
       const result = calculateFeeShares(hugeTotal, [5_000_000_000, 1]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.CALCULATION_OVERFLOW);
-        expect(result.error).toMatch(/overflow/i);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const sum = result.feeShares.reduce((a, b) => a + b, 0n);
+        expect(sum + result.remainder).toBe(BigInt(hugeTotal));
       }
     });
   });
@@ -290,20 +297,20 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("blocks excessive digits on gross amount", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = calculateFeeShareDeductions(tooBig, [1, 2]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
-    it("blocks intermediate multiplication overflow on share deduction", () => {
-      const hugeGross = "9".repeat(MAX_SAFE_DIGITS);
+    it("deducts shares from a gross far beyond the old 15-digit cap exactly (#698)", () => {
+      const hugeGross = I128_MAX;
       const result = calculateFeeShareDeductions(hugeGross, [5_000_000_000, 1]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.CALCULATION_OVERFLOW);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.netAmount + result.totalFee).toBe(BigInt(hugeGross));
       }
     });
   });
@@ -329,17 +336,17 @@ describe("fee_deduction_calculator overflow validation", () => {
     });
 
     it("blocks fee share entry with excessive digits before summing", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = checkFeeShareCalculation(1000, ["50", excessive]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
-    it("blocks when running total fee sum exceeds MAX_SAFE_DIGITS", () => {
-      const hugeShare = "9".repeat(MAX_SAFE_DIGITS);
-      const result = checkFeeShareCalculation("9".repeat(MAX_SAFE_DIGITS), [hugeShare, hugeShare]);
+    it("blocks when the running total fee sum leaves the i128 range", () => {
+      const hugeShare = I128_MAX;
+      const result = checkFeeShareCalculation(I128_MAX, [hugeShare, hugeShare]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.code).toBe(ERROR_CODES.CALCULATION_OVERFLOW);

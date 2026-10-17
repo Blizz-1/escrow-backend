@@ -1,12 +1,14 @@
 import {
   EXPORTER_PARAM_ERROR_CODES as ERROR_CODES,
-  MAX_SAFE_DIGITS,
   validateFinancialAmount,
   validateFinancialReportExporterParams,
   financial_report_exporter,
   exportFinancialReport,
   FinancialReportExporterErrorException,
 } from "../src/utils/financial_report_exporter.js";
+
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
 
 describe("financial_report_exporter (#505)", () => {
   describe("validateFinancialAmount negative parameter rejection", () => {
@@ -60,11 +62,11 @@ describe("financial_report_exporter (#505)", () => {
     });
 
     it("rejects values exceeding MAX_SAFE_DIGITS with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const res = validateFinancialAmount(tooBig);
       expect(res.ok).toBe(false);
       if (!res.ok) {
-        expect(res.code).toBe(ERROR_CODES.OVERFLOW_EXCESSIVE_DIGITS);
+        expect(res.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
   });

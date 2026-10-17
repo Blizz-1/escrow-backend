@@ -8,6 +8,7 @@
  */
 
 import { divRound } from "./rounding.js";
+import { isAmountWithinRange } from "./digit-limit-validator.js";
 
 /** Max decimal digits allowed for a single cents amount (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
@@ -20,6 +21,7 @@ export const CENTS_DECIMALS = 2;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "CENTS_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "CENTS_INVALID_AMOUNT",
   CONVERSION_OVERFLOW: "CENTS_CONVERSION_OVERFLOW",
   SUM_MISMATCH: "CENTS_SUM_MISMATCH",
@@ -55,11 +57,6 @@ export type DollarsResult =
 
 export type ValidationResult = ConversionResult;
 
-function digitCount(normalized: string): number {
-  const digits = normalized.replace(/^-/, "").replace(/^0+(?=\d)/, "");
-  return digits.length === 0 ? 1 : digits.length;
-}
-
 function parseIntegerInput(
   input: string | number | bigint,
   label: string,
@@ -74,6 +71,15 @@ function parseIntegerInput(
       return {
         ok: false,
         error: `${label} must be a finite integer`,
+        code: invalidCode,
+      };
+    }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
         code: invalidCode,
       };
     }
@@ -96,11 +102,11 @@ function parseIntegerInput(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -182,6 +188,15 @@ export function validateCentsAmount(
         code: ERROR_CODES.INVALID_AMOUNT,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_AMOUNT,
+      };
+    }
     raw = String(input);
   } else {
     if (typeof input !== "string") {
@@ -208,11 +223,11 @@ export function validateCentsAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -262,10 +277,10 @@ export function dollarsToCents(humanAmount: string | number): ConversionResult {
   const paddedFractional = fractionalPart.padEnd(CENTS_DECIMALS, "0");
   const combined = `${wholePart}${paddedFractional}`.replace(/^0+(?=\d)/, "");
 
-  if (digitCount(combined) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(combined))) {
     return {
       ok: false,
-      error: `converted amount would exceed maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: "converted amount exceeds the i128 amount range",
       code: ERROR_CODES.CONVERSION_OVERFLOW,
     };
   }
@@ -404,19 +419,19 @@ export function applyStablecoinCentsMultiplier(
   }
 
   const product = centsResult.value * multiplierResult.value;
-  if (digitCount(product.toString()) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(product)) {
     return {
       ok: false,
-      error: `multiplied cents value exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: "multiplied cents value exceeds the i128 amount range",
       code: ERROR_CODES.PRODUCT_OVERFLOW,
     };
   }
 
   const finalValue = roundIntegerDivision(product, divisorResult.value, mode);
-  if (digitCount(finalValue.toString()) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(finalValue)) {
     return {
       ok: false,
-      error: `multiplied cents value exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: "multiplied cents value exceeds the i128 amount range",
       code: ERROR_CODES.PRODUCT_OVERFLOW,
     };
   }
@@ -534,10 +549,10 @@ export function toCents(
     /^0+(?=\d)/,
     ""
   );
-  if (digitCount(combined) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(combined))) {
     return {
       ok: false,
-      error: `converted amount would exceed maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: "converted amount exceeds the i128 amount range",
       code: ERROR_CODES.CONVERSION_OVERFLOW,
     };
   }

@@ -12,7 +12,9 @@
 
 import { writeFile } from "node:fs/promises";
 import { escapeCSVField } from "./csv-serializer.js";
-import { digitCount, MAX_SAFE_DIGITS, parseIntegerInput } from "./digit-limit-validator.js";
+import { digitCount, MAX_SAFE_DIGITS, parseIntegerInput,
+  isAmountWithinRange,
+} from "./digit-limit-validator.js";
 import { divideHalfEven } from "./financial_report_math.js";
 
 export const FINANCIAL_REPORT_EXPORTER_ERRORS = {
@@ -1496,6 +1498,7 @@ export const EXPORTER_PARAM_ERROR_CODES = {
   INVALID_PARAMETER: "INVALID_PARAMETER",
   INVALID_AMOUNT: "INVALID_AMOUNT",
   EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   OVERFLOW_EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
   EMPTY_DATA: "EMPTY_DATA",
   INVALID_ROW: "INVALID_ROW",
@@ -1567,10 +1570,10 @@ export function assertFinancialReportSplitSum(
       return splitCheck;
     }
     const next = total + splitCheck.value;
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `split total exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "split total exceeds the i128 amount range",
         code: EXPORTER_PARAM_ERROR_CODES.EXCESSIVE_DIGITS,
       };
     }
@@ -1621,12 +1624,11 @@ export function validateFinancialAmount(
         code: EXPORTER_PARAM_ERROR_CODES.NEGATIVE_PARAMETER,
       };
     }
-    const raw = value.toString();
-    if (digitCount(raw) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(value)) {
       return {
         ok: false,
-        error: `Parameter "${name}" exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-        code: EXPORTER_PARAM_ERROR_CODES.EXCESSIVE_DIGITS,
+        error: `Parameter "${name}" exceeds the i128 amount range`,
+        code: EXPORTER_PARAM_ERROR_CODES.AMOUNT_OUT_OF_RANGE,
       };
     }
     return { ok: true, value };
@@ -1683,7 +1685,7 @@ export function validateFinancialAmount(
       trimmed,
       name,
       EXPORTER_PARAM_ERROR_CODES.INVALID_PARAMETER,
-      EXPORTER_PARAM_ERROR_CODES.EXCESSIVE_DIGITS
+      EXPORTER_PARAM_ERROR_CODES.AMOUNT_OUT_OF_RANGE
     );
   }
 

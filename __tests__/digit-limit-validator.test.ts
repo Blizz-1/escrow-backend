@@ -8,6 +8,11 @@ import { MAX_SAFE_DIGITS as MATH_MAX } from "../src/utils/conversion_rate_math.j
 import { MAX_SAFE_DIGITS as ESTIMATOR_MAX } from "../src/utils/interest_yield_estimator.js";
 import { MAX_SAFE_DIGITS as REFUND_MAX } from "../src/utils/refund_ratio_helper.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
+
 describe("digit-limit-validator shared module (#530)", () => {
   describe("MAX_SAFE_DIGITS", () => {
     it("exposes 15 as the shared limit", () => {
@@ -96,15 +101,15 @@ describe("digit-limit-validator shared module (#530)", () => {
       if (res.ok) expect(res.value).toBe(-42n);
     });
 
-    it("rejects values over the digit limit with the excessive-digits code", () => {
-      const tooBig = "9".repeat(MAX_SAFE_DIGITS + 1);
+    it("rejects values outside the i128 range with the out-of-range code", () => {
+      const tooBig = OVER_I128;
       for (const input of [tooBig, tooBig] as const) {
         const res = parseIntegerInput(input, "amount", INVALID, EXCESSIVE);
         expect(res.ok).toBe(false);
         if (!res.ok) expect(res.code).toBe(EXCESSIVE);
       }
       const bigNum = parseIntegerInput(
-        BigInt("9".repeat(MAX_SAFE_DIGITS + 1)),
+        BigInt(OVER_I128),
         "amount",
         INVALID,
         EXCESSIVE
@@ -113,11 +118,29 @@ describe("digit-limit-validator shared module (#530)", () => {
       if (!bigNum.ok) expect(bigNum.code).toBe(EXCESSIVE);
     });
 
-    it("accepts exactly MAX_SAFE_DIGITS digits (boundary)", () => {
-      const atLimit = "9".repeat(MAX_SAFE_DIGITS);
-      expect(parseIntegerInput(atLimit, "a", INVALID, EXCESSIVE).ok).toBe(true);
-      expect(parseIntegerInput(Number("9".repeat(15)), "a", INVALID, EXCESSIVE).ok).toBe(true);
-      expect(parseIntegerInput(BigInt(atLimit), "a", INVALID, EXCESSIVE).ok).toBe(true);
+    it("accepts amounts above the old 15-digit cap up to i128 max (#698)", () => {
+      const twentyDigits = "1" + "0".repeat(19);
+      expect(parseIntegerInput(twentyDigits, "a", INVALID, EXCESSIVE).ok).toBe(true);
+      expect(parseIntegerInput(I128_MAX, "a", INVALID, EXCESSIVE).ok).toBe(true);
+      expect(parseIntegerInput(BigInt(I128_MAX), "a", INVALID, EXCESSIVE).ok).toBe(true);
+      expect(parseIntegerInput((-(2n ** 127n)).toString(), "a", INVALID, EXCESSIVE).ok).toBe(true);
+    });
+
+    it("rejects i128 min - 1 with the out-of-range code", () => {
+      const res = parseIntegerInput((-(2n ** 127n) - 1n).toString(), "a", INVALID, EXCESSIVE);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.code).toBe(EXCESSIVE);
+    });
+
+    it("accepts safe-integer numbers but rejects numbers above 2^53", () => {
+      expect(parseIntegerInput(Number.MAX_SAFE_INTEGER, "a", INVALID, EXCESSIVE).ok).toBe(true);
+      // 2^53 + 1 is not representable, so a number this large is already wrong.
+      const res = parseIntegerInput(2 ** 53 + 2, "a", INVALID, EXCESSIVE);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.code).toBe(INVALID);
+        expect(res.error).toMatch(/pass large amounts as a string/);
+      }
     });
   });
 });

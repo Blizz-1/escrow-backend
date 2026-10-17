@@ -6,6 +6,9 @@ import {
   allocatePartialPayment,
 } from "../src/utils/partial_payment_allocator.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+
 describe("partial_payment_allocator overflow validation", () => {
   describe("validatePaymentAmount", () => {
     it("accepts values within the digit limit", () => {
@@ -22,12 +25,12 @@ describe("partial_payment_allocator overflow validation", () => {
     });
 
     it("rejects excessive digits with ALLOCATOR_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validatePaymentAmount(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -78,11 +81,11 @@ describe("partial_payment_allocator overflow validation", () => {
     });
 
     it("rejects a total amount with excessive digits, propagating EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = allocatePartialPayment(tooBig, [1, 1]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -116,16 +119,15 @@ describe("partial_payment_allocator overflow validation", () => {
       }
     });
 
-    it("blocks an allocation whose intermediate multiplication would overflow", () => {
-      // A total amount right at the max allowed digit count (15 nines) combined
-      // with a large share numerator forces the intermediate product
-      // (total * scaledNumerator) well past MAX_INTERMEDIATE_DIGITS.
-      const hugeTotal = "9".repeat(MAX_SAFE_DIGITS);
+    it("allocates a total far beyond the old 15-digit cap exactly (#698)", () => {
+      // The intermediate product (total * scaledNumerator) is bigint, so it
+      // cannot overflow; each allocation is at most the total.
+      const hugeTotal = (2n ** 127n - 1n).toString();
       const result = allocatePartialPayment(hugeTotal, [5_000_000_000, 1]);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.ALLOCATION_OVERFLOW);
-        expect(result.error).toMatch(/overflow/i);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const sum = result.allocations.reduce((a: bigint, b: bigint) => a + b, 0n);
+        expect(sum + result.remainder).toBe(BigInt(hugeTotal));
       }
     });
 

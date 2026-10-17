@@ -37,6 +37,12 @@ npm run dev
 
 ## API Endpoints
 
+### API Versioning
+
+New integrations should use `/api/v1`. Existing `/api` routes remain available
+for compatibility and return `Deprecation: true`; response-shape changes belong
+in a new API version rather than silently changing a published version.
+
 ### GET /health
 
 Check backend health.

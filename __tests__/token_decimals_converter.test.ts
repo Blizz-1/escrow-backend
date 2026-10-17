@@ -3,7 +3,6 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
-  MAX_SAFE_DIGITS,
   MAX_TOKEN_DECIMALS,
   ERROR_CODES,
   validateDecimals,
@@ -39,6 +38,9 @@ import {
   parseCsvFromFile,
   TokenConversionRecord,
 } from "../src/utils/token_decimals_converter.js";
+
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
 
 describe("token_decimals_converter overflow validation", () => {
   describe("validateDecimals", () => {
@@ -96,11 +98,11 @@ describe("token_decimals_converter overflow validation", () => {
     });
 
     it("rejects excessive digits with DECIMALS_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateRawAmount(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -189,7 +191,8 @@ describe("token_decimals_converter overflow validation", () => {
     });
 
     it("blocks a conversion that would overflow the safe digit limit after scaling", () => {
-      const manyDigits = "1".repeat(10); // 10 digit whole part
+      // 22 whole digits scaled by 10^18 is 40 digits, past i128 max.
+      const manyDigits = "1".repeat(22);
       const result = toRawUnits(manyDigits, 18);
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -272,11 +275,11 @@ describe("token_decimals_converter overflow validation", () => {
     });
 
     it("propagates DECIMALS_EXCESSIVE_DIGITS for an excessive-digit raw amount", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = toHumanUnits(tooBig, 7);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -456,11 +459,11 @@ describe("token_decimals_converter overflow validation", () => {
     });
 
     it("rejects excessive digits in rawAmount", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const res = validateConversionRecord({ rawAmount: tooBig, decimals: 7 });
       expect(res.ok).toBe(false);
       if (!res.ok) {
-        expect(res.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(res.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -1518,7 +1521,9 @@ describe("Configure format columns for DB storage in token_decimals_converter (#
       expect(validateDbPrecisionSchema({ scale: -1 }).ok).toBe(false);
       expect(validateDbPrecisionSchema({ scale: 20 }).ok).toBe(false);
       expect(validateDbPrecisionSchema({ precision: -5 }).ok).toBe(false);
-      expect(validateDbPrecisionSchema({ precision: 20 }).ok).toBe(false);
+      // Precision may now span the full i128 width (39 digits), no more (#698).
+      expect(validateDbPrecisionSchema({ precision: 39 }).ok).toBe(true);
+      expect(validateDbPrecisionSchema({ precision: 40 }).ok).toBe(false);
       expect(validateDbPrecisionSchema({ scale: 10, precision: 5 }).ok).toBe(false);
     });
 
@@ -1610,11 +1615,11 @@ describe("Configure format columns for DB storage in token_decimals_converter (#
     });
 
     it("rejects inputs exceeding MAX_SAFE_DIGITS (15) with EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const res = formatForDbStorage(tooBig, 7);
       expect(res.ok).toBe(false);
       if (!res.ok) {
-        expect(res.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(res.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
   });

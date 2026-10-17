@@ -25,6 +25,9 @@ import {
   type FeeDeductionRecord,
 } from "../src/utils/fee_deduction_calculator.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+
 describe("fee_deduction_calculator CSV format exporters (#435)", () => {
   describe("escapeCsvField and formatRowToCsv", () => {
     it("escapes fields with commas and quotes", () => {
@@ -63,7 +66,7 @@ describe("fee_deduction_calculator CSV format exporters (#435)", () => {
     });
 
     it("propagates overflow validation failures", () => {
-      const tooBig = "1" + "0".repeat(15);
+      const tooBig = OVER_I128;
       const res = validateFeeDeductionRecord({ grossAmount: tooBig, feeRate: 1 });
       expect(res.ok).toBe(false);
     });

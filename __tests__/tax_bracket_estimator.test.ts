@@ -9,6 +9,9 @@ import {
   resetTaxEstimatorRateLimitBuckets,
 } from "../src/utils/tax_deduction_estimator.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+
 // Ported from #549. Its flat-rate estimateTaxDeduction / validateTaxRate
 // tests are not included: main's existing implementations of those names
 // (#452/#453) are kept and covered by tax_deduction_estimator.test.ts.
@@ -92,12 +95,12 @@ describe("tax_deduction_estimator – validateGrossAmount", () => {
   });
 
   it("rejects value exceeding MAX_SAFE_DIGITS with EXCESSIVE_DIGITS", () => {
-    const tooBig = "1" + repeat("0", MAX_SAFE_DIGITS);
+    const tooBig = OVER_I128;
     const result = validateGrossAmount(tooBig);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-      expect(result.error).toMatch(/exceeds maximum/i);
+      expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+      expect(result.error).toMatch(/i128 amount range/i);
     }
   });
 
@@ -152,10 +155,10 @@ describe("tax_deduction_estimator – validateTaxScale", () => {
   });
 
   it("rejects a scale exceeding MAX_SAFE_DIGITS with EXCESSIVE_DIGITS", () => {
-    const tooBig = "1" + repeat("0", MAX_SAFE_DIGITS);
+    const tooBig = OVER_I128;
     const result = validateTaxScale(tooBig);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+    if (!result.ok) expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
   });
 
   it("response body shape on error has ok, error, code fields", () => {
@@ -355,12 +358,12 @@ describe("tax_deduction_estimator – estimateBracketTax (error codes)", () => {
   });
 
   it("emits EXCESSIVE_DIGITS for grossAmount exceeding digit limit", () => {
-    const tooBig = "1" + repeat("0", MAX_SAFE_DIGITS);
+    const tooBig = OVER_I128;
     const result = estimateBracketTax(tooBig, [
       { upTo: null, rate: 1500, scale: 10_000 },
     ]);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+    if (!result.ok) expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
   });
 
   it("emits INVALID_TAX_RATE for a decimal bracket rate", () => {
@@ -380,12 +383,12 @@ describe("tax_deduction_estimator – estimateBracketTax (error codes)", () => {
   });
 
   it("emits EXCESSIVE_DIGITS for a bracket rate with too many digits", () => {
-    const tooBig = "1" + repeat("0", MAX_SAFE_DIGITS);
+    const tooBig = OVER_I128;
     const result = estimateBracketTax(100_000, [
-      { upTo: null, rate: tooBig, scale: "1" + repeat("0", MAX_SAFE_DIGITS) },
+      { upTo: null, rate: tooBig, scale: OVER_I128 },
     ]);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+    if (!result.ok) expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
   });
 
   it("emits INVALID_SCALE for a zero bracket scale", () => {

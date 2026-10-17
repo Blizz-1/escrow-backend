@@ -1,3 +1,5 @@
+import { isAmountWithinRange } from "./digit-limit-validator.js";
+
 /**
  * Tax deduction estimator and estimated withholding tax generator with
  * overflow / digit-limit validation, path rate limiting, and database precision formatting.
@@ -75,6 +77,7 @@ export function checkTaxEstimatorRateLimit():
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "TAX_ESTIMATOR_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "TAX_ESTIMATOR_INVALID_AMOUNT",
   INVALID_TAX_RATE: "TAX_ESTIMATOR_INVALID_TAX_RATE",
   CALCULATION_OVERFLOW: "TAX_ESTIMATOR_OVERFLOW",
@@ -236,14 +239,6 @@ export function previewTaxWithholding(
   }
 
   const product = balanceCheck.value * taxRateCheck.value;
-  if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-    return {
-      ok: false,
-      error: `intermediate calculation product exceeds maximum of ${MAX_INTERMEDIATE_DIGITS} digits`,
-      code: ERROR_CODES.CALCULATION_OVERFLOW,
-    };
-  }
-
   const withholdingAmount = product / CONTRACT_TAX_BPS_SCALE;
   const remainder = product % CONTRACT_TAX_BPS_SCALE;
   const netAmount = balanceCheck.value - withholdingAmount;
@@ -318,11 +313,6 @@ export type DbFormatResult =
     }
   | { ok: false; error: string; code: TaxEstimatorErrorCode; status?: number };
 
-function digitCount(normalized: string): number {
-  const digits = normalized.replace(/^-/, "").replace(/^0+(?=\d)/, "");
-  return digits.length === 0 ? 1 : digits.length;
-}
-
 /**
  * Parse and validate an amount string/number/bigint against digit limits.
  */
@@ -356,6 +346,15 @@ export function validateTaxAmount(
         code: ERROR_CODES.INVALID_AMOUNT,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_AMOUNT,
+      };
+    }
     raw = String(input);
   } else {
     raw = input.trim();
@@ -375,11 +374,11 @@ export function validateTaxAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -419,6 +418,15 @@ export function validateTaxRate(
         code: ERROR_CODES.INVALID_TAX_RATE,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_TAX_RATE,
+      };
+    }
     raw = String(input);
   } else {
     raw = input.trim();
@@ -438,11 +446,11 @@ export function validateTaxRate(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -553,14 +561,6 @@ export function calculateTaxDeduction(
   }
 
   const product = grossRes.value * rateRes.value;
-  if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-    return {
-      ok: false,
-      error: `intermediate calculation product exceeds maximum of ${MAX_INTERMEDIATE_DIGITS} digits`,
-      code: ERROR_CODES.CALCULATION_OVERFLOW,
-    };
-  }
-
   if (rateRes.value > scaleRes.value) {
     return {
       ok: false,
@@ -1156,14 +1156,6 @@ export function estimateBracketTax(
     const slice = remaining < bandWidth ? remaining : bandWidth;
 
     const product = slice * rate;
-    if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-      return {
-        ok: false,
-        error: `tax estimation for brackets[${i}] would overflow during multiplication`,
-        code: ERROR_CODES.CALCULATION_OVERFLOW,
-      };
-    }
-
     const modeToUse = bracketRounding ?? roundingMode;
     const bracketTax = roundIntegerDivision(product, scale, modeToUse);
     bracketTaxes.push(bracketTax);

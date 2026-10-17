@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   ERROR_CODES,
-  MAX_SAFE_DIGITS,
   AUDIT_LEDGER_CSV_COLUMNS,
   escapeAuditLedgerCsvField,
   formatAuditLedgerCsvRow,
@@ -154,7 +153,7 @@ describe("audit_ledger_sum_checker CSV format exporters (#500)", () => {
     });
 
     it("rejects a running total that overflows the digit limit", () => {
-      const half = "9".repeat(MAX_SAFE_DIGITS);
+      const half = (2n ** 127n - 1n).toString();
       const res = buildAuditLedgerCsvBlock([{ amount: half }, { amount: half }]);
       expect(res.ok).toBe(false);
       if (!res.ok) {

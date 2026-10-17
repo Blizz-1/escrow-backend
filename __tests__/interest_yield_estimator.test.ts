@@ -1,5 +1,4 @@
 import {
-  MAX_SAFE_DIGITS,
   ERROR_CODES,
   ERROR_DEFINITIONS,
   validateInterestRate,
@@ -8,6 +7,11 @@ import {
   estimateInterestYield,
 } from "../src/utils/interest_yield_estimator.js";
 import { validateErrorStructure } from "../src/utils/conversion_rate_math.js";
+
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
 
 describe("interest_yield_estimator overflow validation", () => {
   function expectDefinedError(
@@ -35,12 +39,12 @@ describe("interest_yield_estimator overflow validation", () => {
     });
 
     it("rejects excessive digits with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateInterestRate(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -69,22 +73,22 @@ describe("interest_yield_estimator overflow validation", () => {
     });
 
     it("blocks excessive digits on either operand", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const badPrincipal = estimateInterestYield(excessive, "1");
       expect(badPrincipal.ok).toBe(false);
       if (!badPrincipal.ok) {
-        expect(badPrincipal.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badPrincipal.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
 
       const badRate = estimateInterestYield("1", excessive);
       expect(badRate.ok).toBe(false);
       if (!badRate.ok) {
-        expect(badRate.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badRate.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("blocks when the product overflows the digit limit", () => {
-      const large = "9".repeat(MAX_SAFE_DIGITS);
+      const large = I128_MAX;
       const result = estimateInterestYield(large, "10");
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -103,27 +107,6 @@ describe("interest_yield_estimator overflow validation", () => {
       expect(estimateInterestYield(1_000, 25)).toEqual({ ok: true, value: 25_000n });
     });
 
-    it("returns a defined calculation exception when result formatting fails", () => {
-      const originalToString = BigInt.prototype.toString;
-      const result = (() => {
-        try {
-          BigInt.prototype.toString = () => {
-            throw new Error("forced formatting failure");
-          };
-          return estimateInterestYield(100, 2);
-        } finally {
-          BigInt.prototype.toString = originalToString;
-        }
-      })();
-
-      expectDefinedError(result, ERROR_CODES.CALCULATION_EXCEPTION, "estimateInterestYield");
-      if (!result.ok) {
-        expect(result.details).toEqual({
-          context: { principal: 100, rate: 2 },
-          reason: "forced formatting failure",
-        });
-      }
-    });
   });
 
   describe("principal and split parameter validation", () => {

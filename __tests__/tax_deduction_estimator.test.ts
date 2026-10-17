@@ -1,5 +1,4 @@
 import {
-  MAX_SAFE_DIGITS,
   MAX_INTERMEDIATE_DIGITS,
   DEFAULT_TAX_SCALE,
   ERROR_CODES,
@@ -26,6 +25,9 @@ import {
   buildTaxDeductionCsvBlock,
   exportTaxDeductionsToCsv,
 } from "../src/utils/tax_deduction_estimator.js";
+
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
 
 describe("tax_deduction_estimator", () => {
   beforeEach(() => {
@@ -61,17 +63,17 @@ describe("tax_deduction_estimator", () => {
     });
 
     it("rejects excessive digits exceeding MAX_SAFE_DIGITS", () => {
-      const excessiveStr = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const excessiveStr = OVER_I128;
       const amountRes = validateTaxAmount(excessiveStr);
       expect(amountRes.ok).toBe(false);
       if (!amountRes.ok) {
-        expect(amountRes.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(amountRes.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
 
       const rateRes = validateTaxRate(excessiveStr);
       expect(rateRes.ok).toBe(false);
       if (!rateRes.ok) {
-        expect(rateRes.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(rateRes.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -121,14 +123,17 @@ describe("tax_deduction_estimator", () => {
       }
     });
 
-    it("blocks when intermediate calculation product overflows MAX_INTERMEDIATE_DIGITS", () => {
-      const large = "9".repeat(MAX_SAFE_DIGITS); // 15 digits
-      const largeRate = "9".repeat(MAX_SAFE_DIGITS); // 15 digits
-      const taxScale = "9".repeat(MAX_SAFE_DIGITS); // 15 digits
-      const result = calculateTaxDeduction(large, largeRate, taxScale);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.CALCULATION_OVERFLOW);
+    // bigint intermediates cannot overflow and tax <= gross because
+    // rate <= scale, so large values compute exactly instead of failing (#698).
+    it("computes exactly when the intermediate product exceeds the old digit cap", () => {
+      const large = "9".repeat(20);
+      const rate = "9".repeat(15);
+      const taxScale = "9".repeat(15);
+      const result = calculateTaxDeduction(large, rate, taxScale);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.taxAmount).toBe(BigInt(large));
+        expect(result.netAmount).toBe(0n);
       }
     });
   });
