@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { isAmountWithinRange, MAX_AMOUNT } from "./digit-limit-validator.js";
 
 /**
  * Token decimals converter with overflow / digit-limit validation.
@@ -16,13 +17,13 @@ export const MAX_SAFE_DIGITS = 15;
  * Practical upper bound for a token's `decimals` value used by this converter.
  * The SEP-41 token interface technically allows `decimals()` to be any u32
  * (up to 255), but real Soroban/Stellar tokens use values in the 0-18 range.
- * Capping at 18 keeps the 10^decimals scaling factor safe to combine with
- * MAX_SAFE_DIGITS without risking silent precision loss or overflow.
+ * Capping at 18 bounds the scale while bigint arithmetic preserves precision.
  */
 export const MAX_TOKEN_DECIMALS = 18;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "DECIMALS_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "DECIMALS_INVALID_AMOUNT",
   INVALID_DECIMALS: "DECIMALS_INVALID_DECIMALS",
   CONVERSION_OVERFLOW: "DECIMALS_CONVERSION_OVERFLOW",
@@ -96,7 +97,7 @@ function checkConversionRateLimit():
 export interface DbPrecisionSchema {
   /** Column scale (decimal places). Defaults to token decimals if not specified. */
   scale?: number;
-  /** Maximum safe precision (total digits). Defaults to MAX_SAFE_DIGITS (15). */
+  /** Maximum precision (total digits). Defaults to the i128 amount width. */
   precision?: number;
   /**
    * Whether to format with fixed decimal scale by padding fractional digits
@@ -337,11 +338,11 @@ export function validateRawAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -453,11 +454,11 @@ export function toRawUnits(
   const paddedFractional = fractionalPart.padEnd(decimals, "0");
   const combined = `${wholePart}${paddedFractional}`.replace(/^0+(?=\d)/, "");
 
-  if (digitCount(combined) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(combined))) {
     return {
       ok: false,
-      error: `converted amount would exceed maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.CONVERSION_OVERFLOW,
+      error: "converted amount exceeds the i128 amount range",
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -560,10 +561,10 @@ export function validateDbPrecisionSchema(
         code: ERROR_CODES.INVALID_SCHEMA,
       };
     }
-    if (schema.precision > MAX_SAFE_DIGITS) {
+    if (schema.precision > MAX_AMOUNT.toString().length) {
       return {
         ok: false,
-        error: `schema precision cannot exceed ${MAX_SAFE_DIGITS} digits`,
+        error: `schema precision cannot exceed ${MAX_AMOUNT.toString().length} digits`,
         code: ERROR_CODES.INVALID_SCHEMA,
       };
     }
@@ -693,7 +694,7 @@ export function formatForDbStorage(
     }
   }
 
-  const maxDigits = schema?.precision ?? MAX_SAFE_DIGITS;
+  const maxDigits = schema?.precision ?? MAX_AMOUNT.toString().length;
   if (digitCount(rawStr) > maxDigits) {
     return {
       ok: false,

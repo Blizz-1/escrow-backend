@@ -6,6 +6,7 @@ import {
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   Address,
 } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
@@ -70,6 +71,7 @@ import {
 } from "../schemas/jobs.js";
 import { strictLimiter, walletLookupLimiter } from "../middleware/rateLimiter.js";
 import logger from "../utils/logger.js";
+import { configuredApiKeys, matchingApiKeyIndex } from "../utils/api-keys.js";
 import { randomUUID } from "crypto";
 
 const router = Router();
@@ -341,20 +343,21 @@ function ensureApiKey(
   logMessage: string,
   logContext: Record<string, unknown>,
 ): boolean {
-  const requiredApiKey = process.env.API_KEY;
-  if (!requiredApiKey) {
+  const expectedKeys = configuredApiKeys("API_KEYS", "API_KEY");
+  if (expectedKeys.length === 0) {
     logger.error("API_KEY is not configured - refusing request", logContext);
     sendError(res, 401, "Unauthorized");
     return false;
   }
 
-  const providedKey = req.header("x-api-key");
-  if (!providedKey || providedKey !== requiredApiKey) {
+  const keyIndex = matchingApiKeyIndex(req.header("x-api-key"), expectedKeys);
+  if (keyIndex === undefined) {
     logger.warn(logMessage, logContext);
     sendError(res, 401, "Unauthorized");
     return false;
   }
 
+  logger.info("API key authenticated", { ...logContext, keyIndex });
   return true;
 }
 
@@ -505,6 +508,69 @@ router.post(
 );
 
 // GET /api/jobs/:contractId/history - event timeline for a single job
+const READ_ONLY_QUERY_METHODS = new Set([
+  "is_paused",
+  "get_whitelisted_tokens",
+  "get_platform_fee_allocation",
+]);
+
+async function handleReadOnlyQuery(req: Request, res: Response): Promise<void> {
+  const contractId = req.method === "GET" ? req.query.contractId : req.body?.contractId;
+  const method = req.method === "GET" ? req.query.method : req.body?.method;
+  if (typeof contractId !== "string" || !contractId.trim()) {
+    sendError(res, 400, "contractId is required");
+    return;
+  }
+  if (typeof method !== "string" || !READ_ONLY_QUERY_METHODS.has(method)) {
+    sendError(res, 400, "Unsupported query method");
+    return;
+  }
+
+  try {
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(process.env.DEPLOYER_ADDRESS || "");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call(method))
+      .setTimeout(30)
+      .build();
+    const result = await server.simulateTransaction(tx);
+
+    if ("error" in result) {
+      const { status, message } = classifySimError(String(result.error));
+      sendError(res, status, message);
+      return;
+    }
+    if (!("result" in result) || !result.result?.retval) {
+      sendError(res, 500, "Internal server error");
+      return;
+    }
+
+    sendSuccess(res, { contractId, method, result: scValToNative(result.result.retval) });
+  } catch (err: unknown) {
+    logger.error("Read-only contract query failed", {
+      contractId,
+      method,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendError(res, 500, "Internal server error");
+  }
+}
+
+router.get("/query", handleReadOnlyQuery);
+router.post("/query", handleReadOnlyQuery);
+
+router.get("/whitelisted-tokens", (req: Request, res: Response) => {
+  const contractId = req.query.contractId;
+  if (typeof contractId !== "string" || !contractId.trim()) {
+    sendError(res, 400, "contractId is required");
+    return;
+  }
+  res.redirect(307, `/${encodeURIComponent(contractId)}/whitelist`);
+});
+
 router.get("/:contractId/history", (req: Request, res: Response) => {
   try {
     const contractId = req.params.contractId as string;
@@ -1297,7 +1363,10 @@ router.post(
 // Validates route parameters using contractMilestoneParamsSchema.
 // ---------------------------------------------------------------------------
 router.get(
-  "/:contractId/milestones/:index/time-remaining",
+  [
+    "/:contractId/milestones/:index/time-remaining",
+    "/:contractId/milestones/:index/auto-release",
+  ],
   timeRemainingCors,
   timeRemainingSecurityHeaders,
   timeRemainingRateLimit,

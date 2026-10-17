@@ -21,12 +21,14 @@ dotenv.config();
 // localhost:3000), or indexing nothing against testnet (CONTRACT_ID unset).
 if (process.env.NODE_ENV === "production") {
   const required = [
-    "API_KEY",
-    "ADMIN_API_KEY",
-    "ALLOWED_ORIGINS",
-    "CONTRACT_ID",
+    { name: "API_KEYS", alternatives: ["API_KEYS", "API_KEY"] },
+    { name: "ADMIN_API_KEYS", alternatives: ["ADMIN_API_KEYS", "ADMIN_API_KEY"] },
+    { name: "ALLOWED_ORIGINS", alternatives: ["ALLOWED_ORIGINS"] },
+    { name: "CONTRACT_ID", alternatives: ["CONTRACT_ID"] },
   ] as const;
-  const missing = required.filter((key) => !process.env[key]);
+  const missing = required
+    .filter(({ alternatives }) => !alternatives.some((key) => process.env[key]))
+    .map(({ name }) => name);
   if (missing.length > 0) {
     throw new Error(
       `Missing required production environment variables: ${missing.join(", ")}`,
@@ -61,7 +63,16 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", contract: process.env.CONTRACT_ID });
 });
 
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (!req.originalUrl.startsWith("/api/v1/")) {
+    res.setHeader("Deprecation", "true");
+  }
+  next();
+});
 app.use("/api", generalLimiter);
+app.use("/api/v1/jobs", jobRoutes);
+app.use("/api/v1/admin", adminRoutes);
+app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/webhooks", webhookRoutes);

@@ -15,6 +15,14 @@
 /** Max decimal digits allowed for a single amount (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
 
+export const MAX_AMOUNT = 2n ** 127n - 1n;
+export const MIN_AMOUNT = -(2n ** 127n);
+export const AMOUNT_OUT_OF_RANGE = "AMOUNT_OUT_OF_RANGE" as const;
+
+export function isAmountWithinRange(value: bigint): boolean {
+  return value >= MIN_AMOUNT && value <= MAX_AMOUNT;
+}
+
 export type SharedValidationResult<TCode extends string> =
   | { ok: true; value: bigint }
   | { ok: false; error: string; code: TCode };
@@ -29,7 +37,7 @@ export function digitCount(normalized: string): number {
 }
 
 /**
- * Parse and validate an integer string/number/bigint against digit limits.
+ * Parse and validate an integer string/number/bigint against the i128 range.
  *
  * @param input - value to parse
  * @param label - human-readable label used in error messages
@@ -86,10 +94,10 @@ export function parseIntegerInput<TCode extends string>(
     };
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: `${label} exceeds the i128 amount range`,
       code: excessiveCode,
     };
   }

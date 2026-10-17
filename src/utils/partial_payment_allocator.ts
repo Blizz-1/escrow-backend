@@ -1,3 +1,5 @@
+import { isAmountWithinRange } from "./digit-limit-validator.js";
+
 /**
  * Partial payment allocator with overflow / digit-limit validation.
  * Splits a milestone payment amount across multiple recipients/shares
@@ -17,6 +19,7 @@ const SHARE_SCALE = 1_000_000;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "ALLOCATOR_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "ALLOCATOR_INVALID_AMOUNT",
   INVALID_SHARES: "ALLOCATOR_INVALID_SHARES",
   ALLOCATION_OVERFLOW: "ALLOCATOR_OVERFLOW",
@@ -32,11 +35,6 @@ export type ValidationResult =
 export type AllocationOutcome =
   | { ok: true; allocations: bigint[]; remainder: bigint }
   | { ok: false; error: string; code: OverflowErrorCode };
-
-function digitCount(normalized: string): number {
-  const digits = normalized.replace(/^-/, "").replace(/^0+(?=\d)/, "");
-  return digits.length === 0 ? 1 : digits.length;
-}
 
 /**
  * Parse and validate a payment amount string/number against digit limits.
@@ -69,11 +67,11 @@ export function validatePaymentAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -153,15 +151,6 @@ export function allocatePartialPayment(
   for (let i = 0; i < scaledNumerators.length; i++) {
     const numerator = scaledNumerators[i];
     const product = total * numerator;
-
-    if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-      return {
-        ok: false,
-        error: `allocation for shares[${i}] would overflow during multiplication`,
-        code: ERROR_CODES.ALLOCATION_OVERFLOW,
-      };
-    }
-
     const allocation = product / scaledDenominator;
     allocations.push(allocation);
     allocatedSum += allocation;
