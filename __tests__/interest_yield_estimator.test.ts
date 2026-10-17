@@ -7,7 +7,7 @@ import {
   validateYieldSplitSum,
   estimateInterestYield,
 } from "../src/utils/interest_yield_estimator.js";
-import { validateErrorStructure } from "../src/utils/conversion_rate_scraper.js";
+import { validateErrorStructure } from "../src/utils/conversion_rate_math.js";
 
 describe("interest_yield_estimator overflow validation", () => {
   function expectDefinedError(

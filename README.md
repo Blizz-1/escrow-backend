@@ -33,6 +33,7 @@ npm run dev
 
 - [Architecture overview](./docs/ARCHITECTURE.md) — live request/indexer paths and reachability table
 - [CSV serialization guide](./docs/CSV_SERIALIZATION_GUIDE.md)
+- [Webhook delivery](./docs/webhooks.md) — event types, payload shapes, retry policy
 
 ## API Endpoints
 

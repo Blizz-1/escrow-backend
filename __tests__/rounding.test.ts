@@ -1,6 +1,6 @@
 import { divRound } from "../src/utils/rounding.js";
 import { divideHalfEven } from "../src/utils/financial_report_math.js";
-import { divideRoundHalfEven } from "../src/utils/conversion_rate_scraper.js";
+import { divideRoundHalfEven } from "../src/utils/conversion_rate_math.js";
 import { roundIntegerDivision } from "../src/utils/tax_deduction_estimator.js";
 
 describe("unified rounding (issue #670)", () => {

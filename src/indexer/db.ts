@@ -253,6 +253,28 @@ const MIGRATIONS: Migration[] = [
         ON events (contract_id, event_type);
     `,
   },
+  {
+    version: 10,
+    description: "create reconciliation_results table (#714)",
+    up: `
+      CREATE TABLE IF NOT EXISTS reconciliation_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_id TEXT NOT NULL,
+        token TEXT,
+        inflow_total TEXT NOT NULL,
+        outflow_total TEXT NOT NULL,
+        expected_balance TEXT NOT NULL,
+        onchain_balance TEXT,
+        delta TEXT,
+        status TEXT NOT NULL,
+        error TEXT,
+        checked_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reconciliation_contract
+        ON reconciliation_results (contract_id, id);
+    `,
+  },
 ];
 
 /** Index names created by the SQLite schema manager lookup-index migration (#259). */
