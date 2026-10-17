@@ -87,6 +87,37 @@ const stellarAccountField = (field: string) =>
     });
 
 // ---------------------------------------------------------------------------
+// build-tx contract method allowlist (#709)
+// ---------------------------------------------------------------------------
+
+/**
+ * User-facing Milesto escrow entry points the frontend may build
+ * transactions for via POST /build-tx. Everything else (e.g. `transfer`)
+ * is rejected with 400 before any RPC call is made.
+ *
+ * Sources: issue #709 method list, backend `contract.call` usages, and the
+ * whitelist-management methods with dedicated arg validation in
+ * `src/routes/jobs.ts`.
+ */
+export const BUILD_TX_ALLOWED_METHODS = [
+  "initialize",
+  "fund",
+  "mark_delivered",
+  "approve_milestone",
+  "approve_partial",
+  "raise_dispute",
+  "resolve_dispute",
+  "claim_auto_release",
+  "add_whitelisted_token",
+  "remove_whitelisted_token",
+  // Admin pause switch, called from the frontend admin page.
+  "admin_pause_escrow",
+  "admin_resume_escrow",
+] as const;
+
+export type BuildTxMethod = (typeof BUILD_TX_ALLOWED_METHODS)[number];
+
+// ---------------------------------------------------------------------------
 // Composed route schemas
 // ---------------------------------------------------------------------------
 
@@ -110,8 +141,18 @@ export const contractMilestoneParamsSchema = z.object({
 export const buildTxBodySchema = z.object({
   // Must be a valid Soroban contract ID
   contractId: contractIdSchema,
-  // The contract method name to call
-  method: z.string({ required_error: "method is required" }).min(1, "method cannot be empty"),
+  // The contract method name to call — restricted to the Milesto escrow's
+  // user-facing entry points so the endpoint can't be used as a
+  // general-purpose transaction builder on the backend's RPC quota (#709).
+  // Kept as z.string (not z.enum) so type errors keep their existing
+  // messages ("Expected string, received boolean").
+  method: z
+    .string({ required_error: "method is required" })
+    .min(1, "method cannot be empty")
+    // Empty strings are left to .min(1) so they keep their own message.
+    .refine((m) => m === "" || (BUILD_TX_ALLOWED_METHODS as readonly string[]).includes(m), {
+      message: `method must be one of: ${BUILD_TX_ALLOWED_METHODS.join(", ")}`,
+    }),
   // Optional arguments for the method, defaults to an empty array
   args: z.array(z.any()).optional().default([]),
   // The Stellar address of the transaction source account
