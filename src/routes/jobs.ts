@@ -78,7 +78,47 @@ const RPC_URL =
   process.env.SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE =
   process.env.SOROBAN_NETWORK_PASSPHRASE || Networks.TESTNET;
-const server = new Server(RPC_URL);
+
+// #691: Apply an explicit HTTP timeout so stalled RPC connections surface as
+// a 504 rather than hanging indefinitely. Default 10 s; override via env.
+const RPC_TIMEOUT_MS = parseInt(process.env.RPC_TIMEOUT_MS || "10000", 10);
+const server = new Server(RPC_URL, { timeout: RPC_TIMEOUT_MS });
+
+/**
+ * #692: Validate that the configured SOROBAN_NETWORK_PASSPHRASE matches the
+ * passphrase the RPC server actually reports. Called once at startup.
+ *
+ * Throws with a descriptive message on any mismatch so the process exits
+ * before serving any traffic with the wrong network config.
+ */
+export async function assertRpcNetworkMatches(): Promise<void> {
+  const localPassphrase =
+    process.env.SOROBAN_NETWORK_PASSPHRASE || Networks.TESTNET;
+
+  let rpcPassphrase: string;
+  try {
+    const network = await server.getNetwork();
+    rpcPassphrase = network.passphrase;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Startup network check failed – could not reach RPC at ${RPC_URL}: ${msg}`,
+    );
+  }
+
+  if (rpcPassphrase !== localPassphrase) {
+    throw new Error(
+      `Network passphrase mismatch: RPC reported "${rpcPassphrase}" ` +
+        `but SOROBAN_NETWORK_PASSPHRASE is set to "${localPassphrase}". ` +
+        `Refusing to start to prevent transactions being built for the wrong network.`,
+    );
+  }
+
+  logger.info("RPC network verified", {
+    network: rpcPassphrase === Networks.TESTNET ? "testnet" : "public",
+    rpc: RPC_URL,
+  });
+}
 
 const WHITELIST_TTL = parseInt(process.env.WHITELIST_CACHE_TTL_S || "60", 10);
 export const whitelistCache = new NodeCache({ stdTTL: WHITELIST_TTL, useClones: false });
@@ -196,6 +236,11 @@ function partialReleaseCacheKey(
  *  - Everything else → 500
  */
 function classifySimError(rawError: string): { status: number; message: string } {
+  // 504 – upstream RPC stalled or timed out (#691)
+  if (/timeout|ETIMEDOUT|ECONNRESET|socket hang up|request timeout|connect timeout/i.test(rawError)) {
+    return { status: 504, message: "Upstream RPC timeout" };
+  }
+
   // 404 – source account missing on the network
   if (/missing account|account not found/i.test(rawError)) {
     return { status: 404, message: "Source account not found on network" };
@@ -244,6 +289,11 @@ class SimError extends Error {
 type Classified = { status: number; message: string };
 
 function classifySubmitError(rawError: string): Classified {
+  // 504 – upstream RPC stalled or timed out (#691)
+  if (/timeout|ETIMEDOUT|ECONNRESET|socket hang up|request timeout|connect timeout/i.test(rawError)) {
+    return { status: 504, message: "Upstream RPC timeout" };
+  }
+
   // 401 – authentication / signature / authorization failures
   if (
     /unauthorized|401/i.test(rawError) ||
@@ -321,42 +371,6 @@ const parseJobFromResult = (result: any, contractId: string) => {
 // the client, freelancer, or arbiter.
 // Query params: ?page=1&limit=10
 // ---------------------------------------------------------------------------
-/**
- * Shared API-key gate for the job routes below.
- *
- * Fails CLOSED. When API_KEY is unset the request is rejected rather than
- * waved through, mirroring requireAdmin() in ../middleware/adminAuth.ts.
- *
- * The previous form of this check was `if (requiredApiKey) { ... }`, which
- * skipped authentication entirely whenever the variable was missing — so a
- * deployment that forgot to set API_KEY silently served these endpoints to
- * anyone, with nothing in the logs to say so.
- *
- * Returns true when the caller is authorised. When it returns false the 401
- * has already been sent and the caller must return immediately.
- */
-function ensureApiKey(
-  req: Request,
-  res: Response,
-  logMessage: string,
-  logContext: Record<string, unknown>,
-): boolean {
-  const requiredApiKey = process.env.API_KEY;
-  if (!requiredApiKey) {
-    logger.error("API_KEY is not configured - refusing request", logContext);
-    sendError(res, 401, "Unauthorized");
-    return false;
-  }
-
-  const providedKey = req.header("x-api-key");
-  if (!providedKey || providedKey !== requiredApiKey) {
-    logger.warn(logMessage, logContext);
-    sendError(res, 401, "Unauthorized");
-    return false;
-  }
-
-  return true;
-}
 
 router.options("/by-wallet/:address", byWalletCors);
 
@@ -618,7 +632,11 @@ router.get(
     const contractId = req.params.contractId as string;
 
     try {
-      if (!ensureApiKey(req, res, "Unauthorized request", { contractId })) return;
+      // Deliberately unauthenticated, for the same reason as GET /by-wallet
+      // and GET /:contractId: reads on-chain state that anyone can simulate
+      // against the public RPC themselves. The whitelist is a public list of
+      // accepted token addresses; the browser cannot hold a secret. Rate
+      // limited via the route limiter rather than a key. (#693)
 
       // Check cache
       const cached = whitelistCache.get<string[]>(contractId);
@@ -756,7 +774,10 @@ router.post(
 
     logger.info("Updating whitelist", { contractId, count: targetAddresses.length });
 
-    if (!ensureApiKey(req, res, "Unauthorized request for whitelist update", { contractId })) return;
+    // Deliberately unauthenticated: this route only builds an unsigned XDR
+    // that the caller's own wallet must sign. The key protected nothing the
+    // signature doesn't already protect. Rate limited via the route limiter
+    // rather than a key. (#693)
 
     // The single-token form (`{ token, action, adminAddress }`) builds and
     // returns an unsigned transaction for the caller to sign, rather than
@@ -1155,7 +1176,10 @@ router.post(
     try {
       const { contractId, index } = req.params;
 
-      if (!ensureApiKey(req, res, "Unauthorized request", { traceId, contractId, index })) return;
+      // Deliberately unauthenticated: this route only builds an unsigned XDR
+      // for approve_partial that the caller's own wallet must sign. The key
+      // protected nothing the signature doesn't already protect. Rate limited
+      // via the route limiter rather than a key. (#693)
 
       const { amount, sourceAddress } = req.body;
 
@@ -1308,7 +1332,9 @@ router.get(
     const contractId = req.params.contractId as string;
     const { index } = req.params;
 
-    if (!ensureApiKey(req, res, "Unauthorized request", { contractId, index })) return;
+    // Deliberately unauthenticated: reads on-chain state (time_until_auto_release)
+    // that anyone can simulate against the public RPC themselves. Rate limited
+    // via the route limiter rather than a key. (#693)
 
     const cacheKey = `${contractId}:${index}`;
 

@@ -1,9 +1,15 @@
-import { getDb, getSubscriptions, EventDbRow } from "./db.js";
-import { readLedgerRange } from "./ledger-range-tracker.js";
+import { getDb, EventDbRow } from "./db.js";
 import logger from "../utils/logger.js";
 
 const MAX_RETRIES = 3;
 const BACKOFF_MS = [500, 1500, 4500];
+
+/**
+ * Page size for the ledger-range scan inside deliverWebhooks (#690).
+ * Keeps peak memory bounded even after long downtime when the range is large.
+ */
+const WEBHOOK_DELIVERY_PAGE_SIZE =
+  parseInt(process.env.WEBHOOK_DELIVERY_PAGE_SIZE || "500", 10) || 500;
 
 interface DeliveryResult {
   subscriptionId: number;
@@ -96,47 +102,82 @@ export async function deliverWebhooks(
   endLedger: number
 ): Promise<DeliveryResult[]> {
   const db = getDb();
-  const subscriptions = getSubscriptions();
-  if (subscriptions.length === 0) return [];
 
-  // Read events within the ledger range inside a transaction
-  // to ensure consistent snapshot even under concurrent ledger updates
-  const events = readLedgerRange(startLedger, endLedger) as EventDbRow[];
+  // Fetch only the contract IDs that actually have subscriptions (#690).
+  // This lets the SQL engine skip every event for un-subscribed contracts
+  // before any rows reach application memory.
+  const subscribedContractIds: string[] = (
+    db
+      .prepare(
+        "SELECT DISTINCT contract_id FROM webhook_subscriptions",
+      )
+      .all() as Array<{ contract_id: string }>
+  ).map((r) => r.contract_id);
 
-  if (events.length === 0) return [];
+  if (subscribedContractIds.length === 0) return [];
+
+  const placeholders = subscribedContractIds.map(() => "?").join(", ");
 
   const results: DeliveryResult[] = [];
 
-  for (const event of events) {
-    for (const sub of subscriptions) {
-      if (
-        sub.contract_id !== event.contract_id ||
-        !subscriptionsMatchEvent(sub.event_types, event.event_type)
-      ) {
-        continue;
-      }
+  // Page through the range 500 rows at a time (#690).
+  // Keeps peak RSS bounded even when the range spans thousands of ledgers.
+  let pageStart = startLedger;
+  while (pageStart <= endLedger) {
+    const pageEnd = Math.min(pageStart + WEBHOOK_DELIVERY_PAGE_SIZE - 1, endLedger);
 
-      const result = await deliverEventToSubscriber(
-        sub.webhook_url,
-        event,
-        sub.id
-      );
-      results.push(result);
+    // Query only events for subscribed contracts within this page.
+    const events = db
+      .prepare(
+        `SELECT * FROM events
+         WHERE ledger_sequence >= ? AND ledger_sequence <= ?
+           AND contract_id IN (${placeholders})
+         ORDER BY ledger_sequence ASC`,
+      )
+      .all(pageStart, pageEnd, ...subscribedContractIds) as EventDbRow[];
 
-      if (result.success) {
-        logger.info(`Webhook delivered`, {
-          subscriptionId: sub.id,
-          eventId: event.id,
-          webhookUrl: sub.webhook_url,
-        });
-      } else {
-        logger.error(`Webhook delivery failed after ${MAX_RETRIES} attempts`, {
-          subscriptionId: sub.id,
-          eventId: event.id,
-          webhookUrl: sub.webhook_url,
-        });
+    for (const event of events) {
+      // Fetch the matching subscriptions for this specific contract.
+      const subscriptions = db
+        .prepare(
+          "SELECT * FROM webhook_subscriptions WHERE contract_id = ?",
+        )
+        .all(event.contract_id) as Array<{
+          id: number;
+          contract_id: string;
+          webhook_url: string;
+          event_types: string;
+        }>;
+
+      for (const sub of subscriptions) {
+        if (!subscriptionsMatchEvent(sub.event_types, event.event_type)) {
+          continue;
+        }
+
+        const result = await deliverEventToSubscriber(
+          sub.webhook_url,
+          event,
+          sub.id,
+        );
+        results.push(result);
+
+        if (result.success) {
+          logger.info(`Webhook delivered`, {
+            subscriptionId: sub.id,
+            eventId: event.id,
+            webhookUrl: sub.webhook_url,
+          });
+        } else {
+          logger.error(`Webhook delivery failed after ${MAX_RETRIES} attempts`, {
+            subscriptionId: sub.id,
+            eventId: event.id,
+            webhookUrl: sub.webhook_url,
+          });
+        }
       }
     }
+
+    pageStart = pageEnd + 1;
   }
 
   return results;

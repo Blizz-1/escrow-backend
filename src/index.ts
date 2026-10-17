@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
-import jobRoutes from "./routes/jobs.js";
+import jobRoutes, { assertRpcNetworkMatches } from "./routes/jobs.js";
 import adminRoutes from "./routes/admin.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { runMigrations } from "./indexer/db.js";
@@ -25,6 +25,11 @@ if (process.env.NODE_ENV === "production") {
     "ADMIN_API_KEY",
     "ALLOWED_ORIGINS",
     "CONTRACT_ID",
+    // #692: both RPC variables must be set explicitly in production; falling
+    // back to testnet defaults against a mainnet RPC (or vice-versa) would
+    // cause every transaction to fail at signature time.
+    "SOROBAN_RPC_URL",
+    "SOROBAN_NETWORK_PASSPHRASE",
   ] as const;
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
@@ -76,7 +81,18 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
 // Run DB migrations then start the indexer poller
 runMigrations();
 markIndexerStarted();
-startPoller();
+
+// #692: Verify the RPC's reported network passphrase matches our config
+// before accepting any traffic. Mismatches would cause silent signature
+// failures; fail loud at startup instead.
+assertRpcNetworkMatches()
+  .then(() => startPoller())
+  .catch((err) => {
+    logger.error("Startup network check failed – shutting down", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  });
 
 app.listen(PORT, () => {
   logger.info("Escrow backend started", { port: PORT });
