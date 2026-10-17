@@ -244,6 +244,30 @@ describe("getJobsByWallet() – unit", () => {
     expect(result.jobs[0].role).toBe("client");
   });
 
+  it("a contract with two events in its latest ledger appears exactly once (#707)", async () => {
+    const addr = "GDUPECHECK";
+    seedEvent(testDb, {
+      contractId: "C-DUP",
+      eventType: "fund",
+      ledger: 200,
+      timestamp: 2000,
+      dataJson: JSON.stringify({ client: addr }),
+    });
+    seedEvent(testDb, {
+      contractId: "C-DUP",
+      eventType: "extend",
+      ledger: 200,
+      timestamp: 2001,
+      dataJson: JSON.stringify({ client: addr }),
+    });
+
+    const result = await getJobsByWallet(addr, 1, 10);
+    expect(result.total).toBe(1);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].contract_id).toBe("C-DUP");
+    expect(result.jobs.length).toBeLessThanOrEqual(10);
+  });
+
   // -------------------------------------------------------------------------
   // Pagination – unit layer
   // -------------------------------------------------------------------------
