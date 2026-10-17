@@ -527,7 +527,12 @@ router.get("/:contractId/history", (req: Request, res: Response) => {
     const result = getEventsByContract(contractId, page, limit);
     res.json({ success: true, ...result });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    // Log the detail server-side only; never forward raw DB errors (#672).
+    logger.error("Failed to fetch job history", {
+      contractId: req.params.contractId,
+      error: err?.message,
+    });
+    sendError(res, 500, "Internal server error");
   }
 });
 
