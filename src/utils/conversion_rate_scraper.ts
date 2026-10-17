@@ -35,6 +35,7 @@ import {
   parseIntegerInput,
   MAX_SAFE_DIGITS,
 } from "./digit-limit-validator.js";
+import { divRound } from "./rounding.js";
 
 export { MAX_SAFE_DIGITS };
 
@@ -269,36 +270,8 @@ export function applyConversionRate(
  * divideRoundHalfEven(3n, 2n)  // 2n — halfway rounds to even (2, not 1)
  */
 export function divideRoundHalfEven(numerator: bigint, divisor: bigint): bigint {
-  if (divisor === 0n) {
-    throw new RangeError("divideRoundHalfEven: divisor must not be zero");
-  }
-
-  const quotient = numerator / divisor;
-  const remainder = numerator - quotient * divisor;
-
-  // Absolute values for comparison (handles negative inputs)
-  const absRemainder = remainder < 0n ? -remainder : remainder;
-  const absDivisor = divisor < 0n ? -divisor : divisor;
-  const doubleRemainder = absRemainder * 2n;
-
-  if (doubleRemainder < absDivisor) {
-    // Below halfway → truncate (round toward zero)
-    return quotient;
-  }
-
-  if (doubleRemainder > absDivisor) {
-    // Above halfway → round away from zero
-    const direction = (numerator < 0n) !== (divisor < 0n) ? -1n : 1n;
-    return quotient + direction;
-  }
-
-  // Exactly halfway → round to the nearest even integer
-  const isQuotientEven = quotient % 2n === 0n;
-  if (isQuotientEven) {
-    return quotient;
-  }
-  const direction = (numerator < 0n) !== (divisor < 0n) ? -1n : 1n;
-  return quotient + direction;
+  // Issue #670: unified rounding — preserves RangeError on zero divisor.
+  return divRound(numerator, divisor, "half-even");
 }
 
 /**
@@ -1117,3 +1090,4 @@ export function safeApplyConversionRateWithValidation(
     value: applied.value,
   };
 }
+
