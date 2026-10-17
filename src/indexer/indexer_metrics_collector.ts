@@ -11,6 +11,7 @@ import {
   type RpcRetryConfig,
   type RpcServerLike,
 } from "./rpc-poller-client.js";
+import { FailureMonitor } from "./failure-monitor.js";
 
 /**
  * indexer_metrics_collector – poller performance telemetry tracker.
@@ -337,114 +338,55 @@ export interface IndexerMetricsMonitorOptions {
  * Every failure is logged as an error; the warning alert fires from the
  * threshold onwards so a persistent outage keeps surfacing rather than
  * alerting once and going quiet. A successful collection clears the state.
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class IndexerMetricsFailureMonitor {
+export class IndexerMetricsFailureMonitor extends FailureMonitor {
   readonly collector: string;
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
 
   constructor(options: IndexerMetricsMonitorOptions = {}) {
     const env = getIndexerMetricsAlertConfig();
-    this.collector = options.name ?? COLLECTOR_NAME;
-    this.failureThreshold = options.failureThreshold ?? env.failureThreshold;
-    this.stallThresholdMs = options.stallThresholdMs ?? env.stallThresholdMs;
-  }
-
-  getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
-  }
-
-  getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
-  }
-
-  isAlertActive(): boolean {
-    return this.alertActive;
-  }
-
-  /**
-   * Record a failed collection. Returns the new consecutive-failure count.
-   * Emits an error every time and a warning alert from the threshold onwards.
-   */
-  recordFailure(
-    failureType: IndexerMetricsFailureType,
-    details: { error?: string; operation?: string } = {},
-  ): number {
-    this.consecutiveFailures += 1;
-
-    const payload = {
-      collector: this.collector,
-      failureType,
-      operation: details.operation,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      error: details.error,
-    };
-
-    logger.error("indexer_metrics_collector operation failed", payload);
-
-    if (this.consecutiveFailures >= this.failureThreshold) {
-      this.alertActive = true;
-      logger.warn(
-        "indexer_metrics_collector alert: consecutive failure threshold reached",
-        {
-          ...payload,
-          action:
-            "Inspect the indexer database and metrics queries; alerting clears automatically after the next successful collection.",
-        },
-      );
-    }
-
-    return this.consecutiveFailures;
-  }
-
-  /** Record a successful collection, clearing any active alert. */
-  recordSuccess(): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    if (hadFailures) {
-      logger.info("indexer_metrics_collector recovered after failures", {
-        collector: this.collector,
-      });
-    }
-    this.alertActive = false;
-  }
-
-  /**
-   * Warn when no successful collection has landed inside the stall window.
-   * Does not touch the consecutive-failure counter, so a later success still
-   * recovers cleanly. Returns true when a stall was reported.
-   */
-  checkStall(): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
-    if (elapsedMs <= this.stallThresholdMs) return false;
-
-    logger.warn(
-      "indexer_metrics_collector alert: collection stall threshold reached",
-      {
-        collector: this.collector,
-        failureType: "stall" as const,
-        consecutiveFailures: this.consecutiveFailures,
-        threshold: this.failureThreshold,
-        stallThresholdMs: this.stallThresholdMs,
-        elapsedMs,
-        action:
-          "No successful metrics collection within the stall window; inspect the poller and database health.",
+    super({
+      name: options.name ?? COLLECTOR_NAME,
+      logComponent: COLLECTOR_NAME,
+      payloadKey: "collector",
+      failureThreshold: options.failureThreshold ?? env.failureThreshold,
+      stallThresholdMs: options.stallThresholdMs ?? env.stallThresholdMs,
+      thresholdReachedOrExceeded: true,
+      logRecoveryOnSuccess: true,
+      onError: (_failureType, payload) => {
+        logger.error("indexer_metrics_collector operation failed", payload);
       },
-    );
-    return true;
-  }
-
-  reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
+      onAlert: (payload) => {
+        logger.warn(
+          "indexer_metrics_collector alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect the indexer database and metrics queries; alerting clears automatically after the next successful collection.",
+          },
+        );
+      },
+      onRecovery: (hadFailures) => {
+        if (hadFailures) {
+          logger.info("indexer_metrics_collector recovered after failures", {
+            collector: this.name,
+          });
+        }
+      },
+      onStall: (info) => {
+        logger.warn(
+          "indexer_metrics_collector alert: collection stall threshold reached",
+          {
+            ...info,
+            action:
+              "No successful metrics collection within the stall window; inspect the poller and database health.",
+          },
+        );
+      },
+    });
+    this.collector = this.name;
   }
 }
 

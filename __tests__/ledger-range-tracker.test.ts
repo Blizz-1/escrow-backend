@@ -37,6 +37,10 @@ describe("LedgerRangeTracker – Transactional Operations", () => {
     testDb.exec("DROP TABLE IF EXISTS events");
     testDb.exec("DROP TABLE IF EXISTS indexer_state");
     testDb.exec("DROP TABLE IF EXISTS schema_migrations");
+    // Replaying every migration needs every migrated table gone, or ALTERs on
+    // tables that survived the reset fail with duplicate columns.
+    testDb.exec("DROP TABLE IF EXISTS monitored_contracts");
+    testDb.exec("DROP TABLE IF EXISTS reconciliation_results");
     runMigrations();
   });
 
