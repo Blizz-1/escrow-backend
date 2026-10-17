@@ -41,7 +41,7 @@ app.use("/api/jobs", router);
 
 const VALID_BODY = {
   contractId: "CDD5WKK3WT3QVKXMXTJNDIXE4T73FK6GGXDSD6UTJAH6YYZU52SQ4MUH",
-  method: "fund_job",
+  method: "fund",
   args: [],
   sourceAddress: "GAODBHVR63Z56MVQRBEJSYM2H5423LJ4WAPUUBOFG4JYY72S6ROKVZRX",
 };
@@ -424,7 +424,7 @@ describe("POST /api/jobs/build-tx — in-memory caching (duplicate network hits)
     const first = await request(app).post("/api/jobs/build-tx").send(VALID_BODY).expect(200);
     const second = await request(app)
       .post("/api/jobs/build-tx")
-      .send({ ...VALID_BODY, method: "release_milestone" })
+      .send({ ...VALID_BODY, method: "approve_milestone" })
       .expect(200);
 
     expect(first.body.xdr).toBe("AAAA_FIRST");
@@ -680,3 +680,66 @@ describe('POST /api/jobs/build-tx – CORS and security headers', () => {
   });
 });
 
+
+describe("POST /api/jobs/build-tx — contract method allowlist (#709)", () => {
+  beforeEach(() => {
+    resetBuildTxRateLimitBuckets();
+    resetBuildTxCache();
+    mockGetAccount.mockReset();
+    mockPrepareTransaction.mockReset();
+
+    mockGetAccount.mockResolvedValue({
+      accountId: () => VALID_BODY.sourceAddress,
+      sequenceNumber: () => "1",
+      incrementSequenceNumber: () => {},
+    });
+  });
+
+  it("returns 400 for method transfer without any RPC call", async () => {
+    const body = { ...VALID_BODY, method: "transfer" };
+    const res = await request(app).post("/api/jobs/build-tx").send(body).expect(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.fields.method).toContain("method must be one of:");
+    expect(mockGetAccount).not.toHaveBeenCalled();
+    expect(mockPrepareTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "initialize",
+    "fund",
+    "mark_delivered",
+    "approve_milestone",
+    "approve_partial",
+    "raise_dispute",
+    "resolve_dispute",
+    "claim_auto_release",
+    "admin_pause_escrow",
+    "admin_resume_escrow",
+  ])("accepts allowlisted method %s", async (method) => {
+    mockPrepareTransaction.mockResolvedValue({ toXDR: () => "AAAAAQ==" });
+    const res = await request(app)
+      .post("/api/jobs/build-tx")
+      .send({ ...VALID_BODY, method })
+      .expect(200);
+    expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
+  });
+
+  it.each(["add_whitelisted_token", "remove_whitelisted_token"])(
+    "accepts allowlisted whitelist method %s with admin+token args",
+    async (method) => {
+      mockPrepareTransaction.mockResolvedValue({ toXDR: () => "AAAAAQ==" });
+      const res = await request(app)
+        .post("/api/jobs/build-tx")
+        .send({
+          ...VALID_BODY,
+          method,
+          args: [
+            { type: "address", value: VALID_ADDRESS },
+            { type: "address", value: SECOND_ADDRESS },
+          ],
+        })
+        .expect(200);
+      expect(res.body).toEqual({ success: true, xdr: "AAAAAQ==" });
+    },
+  );
+});

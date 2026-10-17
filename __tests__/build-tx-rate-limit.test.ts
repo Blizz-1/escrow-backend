@@ -25,7 +25,7 @@ app.use("/api/jobs", router);
 
 const VALID_BODY = {
   contractId: "CDD5WKK3WT3QVKXMXTJNDIXE4T73FK6GGXDSD6UTJAH6YYZU52SQ4MUH",
-  method: "fund_job",
+  method: "fund",
   args: [],
   sourceAddress: "GAODBHVR63Z56MVQRBEJSYM2H5423LJ4WAPUUBOFG4JYY72S6ROKVZRX",
 };
