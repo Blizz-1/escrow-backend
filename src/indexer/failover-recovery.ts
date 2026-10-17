@@ -8,6 +8,7 @@ import {
   LedgerRangeValidationError,
   type LedgerRange,
 } from "./ledger-range-tracker.js";
+import { FailureMonitor } from "./failure-monitor.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -911,95 +912,75 @@ export const getIndexerFailoverRecoveryAlertConfig = getFailoverRecoveryAlertCon
 /**
  * Tracks consecutive indexer_failover_recovery operation failures and stalls,
  * raising warning alerts once configured thresholds are reached (#415).
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class FailoverRecoveryFailureMonitor {
+export class FailoverRecoveryFailureMonitor extends FailureMonitor {
   readonly component: string;
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
   readonly repeatAlerts: boolean;
-
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
-  private stallAlerted = false;
 
   constructor(options: FailoverRecoveryMonitorOptions = {}) {
     const env = getFailoverRecoveryAlertConfig();
-    this.component = options.name ?? "indexer_failover_recovery";
-    this.failureThreshold = options.failureThreshold ?? env.failureThreshold;
-    this.stallThresholdMs = options.stallThresholdMs ?? env.stallThresholdMs;
+    super({
+      name: options.name ?? "indexer_failover_recovery",
+      logComponent: "indexer_failover_recovery",
+      payloadKey: "component",
+      failureThreshold: options.failureThreshold ?? env.failureThreshold,
+      stallThresholdMs: options.stallThresholdMs ?? env.stallThresholdMs,
+      trackStallAlerted: true,
+      thresholdReachedOrExceeded: options.repeatAlerts ?? false,
+      onError: (_failureType, payload) => {
+        logger.error("indexer_failover_recovery operation failed", payload);
+      },
+      onAlert: (payload) => {
+        logger.warn(
+          "indexer_failover_recovery alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect RPC node health, failover state, and network connectivity; alerting clears automatically after the next successful operation.",
+          },
+        );
+      },
+      onStall: (info) => {
+        logger.warn("indexer_failover_recovery alert: stall threshold reached", {
+          ...info,
+          action:
+            "No successful indexer_failover_recovery operation within the stall window; inspect RPC nodes, network connectivity, and indexer health.",
+        });
+      },
+    });
+    this.component = this.name;
     this.repeatAlerts = options.repeatAlerts ?? false;
   }
 
   getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
+    return super.getConsecutiveFailures();
   }
 
   getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
+    return super.getLastSuccessfulAt();
   }
 
   isAlertActive(): boolean {
-    return this.alertActive;
+    return super.isAlertActive();
   }
 
   getFailureThreshold(): number {
-    return this.failureThreshold;
+    return super.getFailureThreshold();
   }
 
   getStallThresholdMs(): number {
-    return this.stallThresholdMs;
-  }
-
-  /**
-   * Record a failed indexer_failover_recovery operation.
-   * Logs an error every time and emits a warning alert when the
-   * consecutive-failure threshold is reached.
-   */
-  recordFailure(
-    failureType: FailoverRecoveryFailureType,
-    details: FailoverRecoveryFailureDetails = {},
-  ): number {
-    this.consecutiveFailures += 1;
-
-    const payload = {
-      component: this.component,
-      failureType,
-      operation: details.operation,
-      nodeUrl: details.nodeUrl,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      error: details.error,
-      elapsedMs: details.elapsedMs,
-    };
-
-    logger.error("indexer_failover_recovery operation failed", payload);
-
-    if (
-      this.consecutiveFailures === this.failureThreshold ||
-      (this.repeatAlerts && this.consecutiveFailures > this.failureThreshold)
-    ) {
-      this.alertActive = true;
-      logger.warn(
-        "indexer_failover_recovery alert: consecutive failure threshold reached",
-        {
-          ...payload,
-          action:
-            "Inspect RPC node health, failover state, and network connectivity; alerting clears automatically after the next successful operation.",
-        },
-      );
-    }
-
-    return this.consecutiveFailures;
+    return super.getStallThresholdMs();
   }
 
   /**
    * Record a successful operation, clearing any active failure or stall alert.
    */
   recordSuccess(details?: { operation?: string; nodeUrl?: string }): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
+    const hadFailures = this.getConsecutiveFailures() > 0 || this.isAlertActive();
+    super.recordSuccess();
     if (hadFailures) {
       logger.info(
         "indexer_failover_recovery recovered after consecutive failures",
@@ -1010,38 +991,10 @@ export class FailoverRecoveryFailureMonitor {
         },
       );
     }
-    this.alertActive = false;
-    this.stallAlerted = false;
-  }
-
-  /**
-   * Warn when no successful operation has completed inside the stall window.
-   */
-  checkStall(): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
-    if (elapsedMs <= this.stallThresholdMs) return false;
-    if (this.stallAlerted) return true;
-
-    this.stallAlerted = true;
-    logger.warn("indexer_failover_recovery alert: stall threshold reached", {
-      component: this.component,
-      failureType: "stall" as const,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      stallThresholdMs: this.stallThresholdMs,
-      elapsedMs,
-      action:
-        "No successful indexer_failover_recovery operation within the stall window; inspect RPC nodes, network connectivity, and indexer health.",
-    });
-    return true;
   }
 
   reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
-    this.stallAlerted = false;
+    super.reset();
   }
 }
 

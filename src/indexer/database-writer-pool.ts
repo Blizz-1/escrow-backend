@@ -8,6 +8,7 @@ import {
   verifySchemaUpToDate,
   type EventRow,
 } from "./db.js";
+import { FailureMonitor } from "./failure-monitor.js";
 import {
   chunkLedgerRange,
   filterEventsToRange,
@@ -991,128 +992,52 @@ export interface WriterPoolMonitorOptions {
  * Every failure is logged as an error; the warning alert fires only when the
  * consecutive-failure threshold is first reached so the same outage is not
  * re-alerted on every subsequent attempt. A successful write clears the state.
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class WriterPoolFailureMonitor {
+export class WriterPoolFailureMonitor extends FailureMonitor {
   readonly pool: string;
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
-  private stallAlerted = false;
 
   constructor(options: WriterPoolMonitorOptions = {}) {
     const env = getWriterPoolAlertConfig();
-    this.pool = options.name ?? POOL_NAME;
-    this.failureThreshold = options.failureThreshold ?? env.failureThreshold;
-    this.stallThresholdMs = options.stallThresholdMs ?? env.stallThresholdMs;
-  }
-
-  getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
-  }
-
-  getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
-  }
-
-  isAlertActive(): boolean {
-    return this.alertActive;
-  }
-
-  /**
-   * Record a failed write. Returns the new consecutive-failure count.
-   * Emits an error every time and a warning alert only when the configured
-   * threshold is first reached (no duplicate alerts while already over).
-   */
-  recordFailure(
-    failureType: WriterPoolFailureType,
-    details: {
-      error?: string;
-      operation?: string;
-      retries?: number;
-      executionTimeMs?: number;
-      queueDepth?: number;
-    } = {},
-  ): number {
-    this.consecutiveFailures += 1;
-
-    const payload = {
-      pool: this.pool,
-      failureType,
-      operation: details.operation,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      retries: details.retries,
-      executionTimeMs: details.executionTimeMs,
-      queueDepth: details.queueDepth,
-      error: details.error,
-    };
-
-    logger.error("database_writer_pool operation failed", payload);
-
-    if (this.consecutiveFailures === this.failureThreshold) {
-      this.alertActive = true;
-      logger.warn(
-        "database_writer_pool alert: consecutive failure threshold reached",
-        {
-          ...payload,
+    super({
+      name: options.name ?? POOL_NAME,
+      logComponent: POOL_NAME,
+      payloadKey: "pool",
+      failureThreshold: options.failureThreshold ?? env.failureThreshold,
+      stallThresholdMs: options.stallThresholdMs ?? env.stallThresholdMs,
+      trackStallAlerted: true,
+      onError: (_failureType, payload) => {
+        logger.error("database_writer_pool operation failed", payload);
+      },
+      onAlert: (payload) => {
+        logger.warn(
+          "database_writer_pool alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect SQLite writer contention, disk health, and queued operations; alerting clears automatically after the next successful write.",
+          },
+        );
+      },
+      onRecovery: (hadFailures) => {
+        if (hadFailures) {
+          logger.info("database_writer_pool recovered after consecutive failures", {
+            pool: this.name,
+          });
+        }
+      },
+      onStall: (info) => {
+        logger.warn("database_writer_pool alert: write stall threshold reached", {
+          ...info,
+          queueDepth: writeQueue.length,
           action:
-            "Inspect SQLite writer contention, disk health, and queued operations; alerting clears automatically after the next successful write.",
-        },
-      );
-    }
-
-    return this.consecutiveFailures;
-  }
-
-  /** Record a successful write, clearing any active failure or stall alert. */
-  recordSuccess(): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    if (hadFailures) {
-      logger.info("database_writer_pool recovered after consecutive failures", {
-        pool: this.pool,
-      });
-    }
-    this.alertActive = false;
-    this.stallAlerted = false;
-  }
-
-  /**
-   * Warn when no successful write has landed inside the stall window.
-   * Does not increment the consecutive-failure counter. A stall is reported
-   * once per quiet period so the same condition is not re-logged on every
-   * subsequent write attempt.
-   */
-  checkStall(): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
-    if (elapsedMs <= this.stallThresholdMs) return false;
-    if (this.stallAlerted) return true;
-
-    this.stallAlerted = true;
-    logger.warn("database_writer_pool alert: write stall threshold reached", {
-      pool: this.pool,
-      failureType: "stall" as const,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      stallThresholdMs: this.stallThresholdMs,
-      elapsedMs,
-      queueDepth: writeQueue.length,
-      action:
-        "No successful database_writer_pool write within the stall window; inspect queue depth, lock contention, and disk health.",
+            "No successful database_writer_pool write within the stall window; inspect queue depth, lock contention, and disk health.",
+        });
+      },
     });
-    return true;
-  }
-
-  reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
-    this.stallAlerted = false;
+    this.pool = this.name;
   }
 }
 

@@ -1,5 +1,6 @@
 import { getDb } from "./db.js";
 import logger from "../utils/logger.js";
+import { FailureMonitor } from "./failure-monitor.js";
 
 /** Index names used by sync-ranges lookups – validated via EXPLAIN QUERY PLAN (#250). */
 export const SYNC_RANGES_INDEXES = {
@@ -271,18 +272,12 @@ function dpReadPositiveIntEnv(name: string, fallback: number): number {
 /**
  * Tracks consecutive failures inside duplicate_prevention and emits a
  * high-priority warning alert exactly when the configured threshold is first
- * crossed.  Behaviour mirrors `LedgerRangeFailureMonitor` and
- * `SqliteSchemaManagerFailureMonitor` so the alerting surface is consistent
- * across all indexer components.
+ * crossed. Behaviour mirrors other indexer failure monitors.
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class DuplicatePreventionFailureMonitor {
-  readonly name: string;
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
-
+export class DuplicatePreventionFailureMonitor extends FailureMonitor {
   constructor(
     options: {
       name?: string;
@@ -290,107 +285,82 @@ export class DuplicatePreventionFailureMonitor {
       stallThresholdMs?: number;
     } = {},
   ) {
-    this.name = options.name ?? "duplicate_prevention";
-    this.failureThreshold =
-      options.failureThreshold ??
-      dpReadPositiveIntEnv(
-        "DUPLICATE_PREVENTION_FAILURE_THRESHOLD",
-        DP_DEFAULT_FAILURE_THRESHOLD,
-      );
-    this.stallThresholdMs =
-      options.stallThresholdMs ??
-      dpReadPositiveIntEnv(
-        "DUPLICATE_PREVENTION_STALL_THRESHOLD_MS",
-        DP_DEFAULT_STALL_THRESHOLD_MS,
-      );
+    super({
+      name: options.name ?? "duplicate_prevention",
+      logComponent: "duplicate_prevention",
+      payloadKey: "component",
+      failureThreshold:
+        options.failureThreshold ??
+        dpReadPositiveIntEnv(
+          "DUPLICATE_PREVENTION_FAILURE_THRESHOLD",
+          DP_DEFAULT_FAILURE_THRESHOLD,
+        ),
+      stallThresholdMs:
+        options.stallThresholdMs ??
+        dpReadPositiveIntEnv(
+          "DUPLICATE_PREVENTION_STALL_THRESHOLD_MS",
+          DP_DEFAULT_STALL_THRESHOLD_MS,
+        ),
+      onError: (_failureType, payload) => {
+        logger.error("duplicate_prevention operation failed", payload);
+      },
+      onAlert: (payload) => {
+        logger.warn(
+          "duplicate_prevention alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect database connectivity, SQLite lock contention, and RPC health; " +
+              "the component resumes automatically after the next successful operation.",
+          },
+        );
+      },
+      onRecovery: (hadFailures) => {
+        if (hadFailures) {
+          logger.info(
+            "duplicate_prevention recovered after consecutive failures",
+            { component: this.name },
+          );
+        }
+      },
+    });
   }
 
   getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
+    return super.getConsecutiveFailures();
   }
 
   getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
+    return super.getLastSuccessfulAt();
   }
 
   isAlertActive(): boolean {
-    return this.alertActive;
+    return super.isAlertActive();
   }
 
   getFailureThreshold(): number {
-    return this.failureThreshold;
-  }
-
-  /**
-   * Record a failure.  Logs `error` on every call and emits a `warn` alert
-   * exactly once when `consecutiveFailures === failureThreshold`.
-   */
-  recordFailure(
-    failureType: DuplicatePreventionFailureType,
-    details: {
-      error?: string;
-      startLedger?: number;
-      endLedger?: number;
-    } = {},
-  ): number {
-    this.consecutiveFailures += 1;
-    const payload = {
-      component: this.name,
-      failureType,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      startLedger: details.startLedger,
-      endLedger: details.endLedger,
-      error: details.error,
-    };
-
-    logger.error("duplicate_prevention operation failed", payload);
-
-    if (this.consecutiveFailures === this.failureThreshold) {
-      this.alertActive = true;
-      logger.warn(
-        "duplicate_prevention alert: consecutive failure threshold reached",
-        {
-          ...payload,
-          action:
-            "Inspect database connectivity, SQLite lock contention, and RPC health; " +
-            "the component resumes automatically after the next successful operation.",
-        },
-      );
-    }
-
-    return this.consecutiveFailures;
-  }
-
-  recordSuccess(): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    if (hadFailures) {
-      logger.info(
-        "duplicate_prevention recovered after consecutive failures",
-        { component: this.name },
-      );
-    }
-    this.alertActive = false;
+    return super.getFailureThreshold();
   }
 
   /**
    * Emit a stall warning when the elapsed time since the last successful
-   * operation exceeds `stallThresholdMs`.  Does not increment the consecutive
-   * failure counter.
+   * operation exceeds `stallThresholdMs`. Does not increment the consecutive
+   * failure counter. Accepts an optional range for ledger context.
    */
   checkStall(range?: { startLedger?: number; endLedger?: number }): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
+    const lastSuccess = this.getLastSuccessfulAt();
+    if (lastSuccess === null) return false;
+    const elapsedMs = Date.now() - lastSuccess;
     if (elapsedMs <= this.stallThresholdMs) return false;
+    if (this.stallAlerted) return true;
 
+    this.stallAlerted = true;
     logger.warn(
       "duplicate_prevention alert: poller stall threshold reached",
       {
         component: this.name,
         failureType: "stall" as const,
-        consecutiveFailures: this.consecutiveFailures,
+        consecutiveFailures: this.getConsecutiveFailures(),
         threshold: this.failureThreshold,
         stallThresholdMs: this.stallThresholdMs,
         elapsedMs,
@@ -405,9 +375,7 @@ export class DuplicatePreventionFailureMonitor {
   }
 
   reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
+    super.reset();
   }
 }
 

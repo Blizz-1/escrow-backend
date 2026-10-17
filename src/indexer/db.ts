@@ -275,6 +275,15 @@ const MIGRATIONS: Migration[] = [
         ON reconciliation_results (contract_id, id);
     `,
   },
+  {
+    version: 11,
+    description: "per-contract ledger pointers (#720)",
+    up: `
+      ALTER TABLE monitored_contracts ADD COLUMN last_ledger_sequence INTEGER NOT NULL DEFAULT 0;
+
+      ALTER TABLE monitored_contracts ADD COLUMN start_ledger INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 /** Index names created by the SQLite schema manager lookup-index migration (#259). */
@@ -627,6 +636,8 @@ const EXPECTED_TABLES: Record<string, string[]> = {
     "label",
     "active",
     "registered_at",
+    "last_ledger_sequence",
+    "start_ledger",
   ],
   schema_migrations: ["version", "description", "applied_at"],
 };
@@ -858,17 +869,32 @@ export function setLastIndexedLedger(seq: number) {
  * deregistered. Idempotent - calling this repeatedly for the same
  * contract_id never creates duplicate rows.
  * Wrapped in a transaction so concurrent writes never leave partial state.
+ *
+ * When `startLedger` is provided and the contract is newly registered, it
+ * becomes the contract's `start_ledger` – the ledger from which the contract's
+ * own polling pointer begins. On re-activation of an existing contract, the
+ * existing `start_ledger` is preserved.
  */
-export function registerContract(contractId: string, label?: string): void {
+export function registerContract(
+  contractId: string,
+  label?: string,
+  startLedger?: number,
+): void {
   const db = getDb();
   const tx = db.transaction(() => {
+    const existing = db
+      .prepare("SELECT start_ledger FROM monitored_contracts WHERE contract_id = ?")
+      .get(contractId) as { start_ledger: number } | undefined;
+
+    const start = startLedger !== undefined && !existing ? startLedger : 0;
+
     db.prepare(
-      `INSERT INTO monitored_contracts (contract_id, label, active)
-       VALUES (?, ?, 1)
+      `INSERT INTO monitored_contracts (contract_id, label, active, start_ledger)
+       VALUES (?, ?, 1, ?)
        ON CONFLICT(contract_id) DO UPDATE SET
          active = 1,
-         label = COALESCE(excluded.label, monitored_contracts.label)`
-    ).run(contractId, label ?? null);
+         label = COALESCE(excluded.label, monitored_contracts.label)`,
+    ).run(contractId, label ?? null, start);
   });
   tx();
 }
@@ -897,6 +923,67 @@ export function getActiveContractIds(): string[] {
     .prepare("SELECT contract_id FROM monitored_contracts WHERE active = 1")
     .all() as Array<{ contract_id: string }>;
   return rows.map((row) => row.contract_id);
+}
+
+export interface ActiveContractPointer {
+  contractId: string;
+  lastLedgerSequence: number;
+  startLedger: number;
+}
+
+/**
+ * Returns active contracts with the ledger each one has been indexed up to.
+ *
+ * A contract that has never been polled (`last_ledger_sequence` = 0) starts
+ * just before its `start_ledger`, so a contract registered with an explicit
+ * start ledger is backfilled from there instead of from the global pointer
+ * (#720). With no start ledger either, it falls back to the global
+ * `indexer_state.last_ledger_sequence`, which keeps legacy single-contract
+ * setups unchanged.
+ */
+export function getActiveContractsWithPointers(): ActiveContractPointer[] {
+  const db = getDb();
+  const globalLedger = getLastIndexedLedger();
+  const rows = db
+    .prepare(
+      `SELECT contract_id,
+              CASE
+                WHEN last_ledger_sequence > 0 THEN last_ledger_sequence
+                WHEN start_ledger > 0 THEN start_ledger - 1
+                ELSE ?
+              END AS last_ledger_sequence,
+              start_ledger
+       FROM monitored_contracts
+       WHERE active = 1
+       ORDER BY id`,
+    )
+    .all(globalLedger) as Array<{
+    contract_id: string;
+    last_ledger_sequence: number;
+    start_ledger: number;
+  }>;
+  return rows.map((row) => ({
+    contractId: row.contract_id,
+    lastLedgerSequence: row.last_ledger_sequence,
+    startLedger: row.start_ledger,
+  }));
+}
+
+/**
+ * Atomically advance a single contract's ledger pointer. Wrapped in a
+ * transaction so concurrent updates never leave partial state.
+ */
+export function updateContractPointer(
+  contractId: string,
+  newLedger: number,
+): void {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare(
+      "UPDATE monitored_contracts SET last_ledger_sequence = ? WHERE contract_id = ?",
+    ).run(newLedger, contractId);
+  });
+  tx();
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,11 +1107,11 @@ export function insertEventBatch(events: EventRow[], newLedger: number): void {
 
   batchTransaction();
 
-  logSchemaManagerPollDiagnostics(
-    "insertEventBatch",
-    startedAt,
-    Buffer.byteLength(JSON.stringify(events), "utf8"),
+  const payloadSizeBytes = events.reduce(
+    (sum, ev) => sum + Buffer.byteLength(ev.dataJson, "utf8"),
+    0,
   );
+  logSchemaManagerPollDiagnostics("insertEventBatch", startedAt, payloadSizeBytes);
 }
 
 /**

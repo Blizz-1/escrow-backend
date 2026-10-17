@@ -20,6 +20,7 @@ jest.unstable_mockModule("@stellar/stellar-sdk", () => ({
   },
   BASE_FEE: "100",
   nativeToScVal: jest.fn(),
+  scValToNative: jest.fn((val: unknown) => val),
   Address: { fromString: jest.fn(() => ({ toScVal: jest.fn() })) },
   StrKey: { isValidEd25519PublicKey: jest.fn(() => true) },
 }));

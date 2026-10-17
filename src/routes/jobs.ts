@@ -6,6 +6,7 @@ import {
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   Address,
 } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
@@ -61,12 +62,14 @@ import {
   createJobDraftLegacyBodySchema,
   whitelistUpdateBodySchema,
   whitelistUpdateRequestSchema,
+  feePreviewQuerySchema,
   type ByWalletQuery,
   type CreateJobDraftBody,
   type CreateJobDraftLegacyBody,
   type UpdateWhitelistBody,
   type WhitelistUpdateBody,
   type WhitelistUpdateRequestBody,
+  type FeePreviewQuery,
 } from "../schemas/jobs.js";
 import { strictLimiter, walletLookupLimiter } from "../middleware/rateLimiter.js";
 import logger from "../utils/logger.js";
@@ -164,6 +167,24 @@ const inFlightPartialReleaseRequests = new Map<string, Promise<string>>();
 export function resetPartialReleaseCache(): void {
   partialReleaseCache.flushAll();
   inFlightPartialReleaseRequests.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Fee preview cache (#719)
+// ---------------------------------------------------------------------------
+
+const FEE_PREVIEW_CACHE_TTL = parseInt(
+  process.env.FEE_PREVIEW_CACHE_TTL_S || "30",
+  10,
+);
+export const feePreviewCache = new NodeCache({
+  stdTTL: FEE_PREVIEW_CACHE_TTL,
+  useClones: false,
+});
+const inFlightFeePreviewRequests = new Map<string, Promise<unknown>>();
+export function resetFeePreviewCache(): void {
+  feePreviewCache.flushAll();
+  inFlightFeePreviewRequests.clear();
 }
 
 /**
@@ -314,6 +335,34 @@ const parseJobFromResult = (result: any, contractId: string) => {
   }
   return null;
 };
+
+/**
+ * Convert a value produced by `scValToNative` into a JSON-safe structure
+ * where all numeric amounts are returned as decimal strings (#719).
+ * Handles Maps (contract return values), Arrays, bigints, and primitives.
+ */
+function convertScValToNativeStrings(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean")
+    return value;
+  if (Array.isArray(value)) return value.map(convertScValToNativeStrings);
+  if (value instanceof Map) {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of value) {
+      obj[String(k)] = convertScValToNativeStrings(v);
+    }
+    return obj;
+  }
+  if (typeof value === "object") {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      obj[k] = convertScValToNativeStrings(v);
+    }
+    return obj;
+  }
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/jobs/by-wallet/:address
@@ -535,6 +584,107 @@ router.get("/:contractId/history", (req: Request, res: Response) => {
     sendError(res, 500, "Internal server error");
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/jobs/:contractId/fee-preview – simulate calculate_platform_fee_split
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/:contractId/fee-preview",
+  jobContractCors,
+  jobContractSecurityHeaders,
+  jobContractRateLimit,
+  validate(contractIdParamsSchema, "params", (req) =>
+    logger.warn("Invalid contractId provided", { contractId: req.params.contractId }),
+  ),
+  validate(feePreviewQuerySchema, "query", (req) =>
+    logger.warn("Invalid fee-preview query", { query: req.query }),
+  ),
+  async (req: Request, res: Response) => {
+    const contractId = req.params.contractId as string;
+    const { amount } = (req as RequestWithValidatedQuery)
+      .validatedQuery as FeePreviewQuery;
+    const cacheKey = `${contractId}:${amount}`;
+
+    // Check cache
+    const cached = feePreviewCache.get<Record<string, unknown>>(cacheKey);
+    if (cached !== undefined) {
+      logger.info("Fee preview served from cache", { contractId, amount });
+      sendSuccess(res, cached);
+      return;
+    }
+
+    let requestPromise = inFlightFeePreviewRequests.get(cacheKey) as
+      | Promise<Record<string, unknown>>
+      | undefined;
+    const servedFromInFlight = Boolean(requestPromise);
+
+    if (!requestPromise) {
+      requestPromise = (async (): Promise<Record<string, unknown>> => {
+        const contract = new Contract(contractId);
+        const account = await server.getAccount(
+          process.env.DEPLOYER_ADDRESS || "",
+        );
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: NETWORK_PASSPHRASE,
+        })
+          .addOperation(
+            contract.call(
+              "calculate_platform_fee_split",
+              nativeToScVal(BigInt(amount), { type: "i128" }),
+            ),
+          )
+          .setTimeout(30)
+          .build();
+
+        // Read-only simulation only – never submits a transaction (#719).
+        const result = await server.simulateTransaction(tx);
+
+        if ("error" in result) {
+          const { status, message } = classifySimError(String(result.error));
+          throw new SimError(status, message);
+        }
+
+        if ("result" in result && result.result?.retval) {
+          const retval = scValToNative(result.result.retval);
+          const split = convertScValToNativeStrings(retval) as Record<
+            string,
+            unknown
+          >;
+          feePreviewCache.set(cacheKey, split);
+          return split;
+        }
+
+        throw new SimError(500, "Internal server error");
+      })();
+      inFlightFeePreviewRequests.set(cacheKey, requestPromise);
+    }
+
+    try {
+      const split = await requestPromise;
+      if (servedFromInFlight) {
+        logger.info("Fee preview served from in-flight cache", { contractId, amount });
+      }
+      sendSuccess(res, split);
+    } catch (err: any) {
+      // Failures are never cached; the client only sees a classified status
+      // and a fixed message, never the raw RPC error.
+      if (err instanceof SimError) {
+        sendError(res, err.status, err.message);
+        return;
+      }
+      logger.error("Failed to compute fee preview", {
+        contractId,
+        amount,
+        error: err?.message ?? String(err),
+      });
+      sendError(res, 500, "Internal server error");
+    } finally {
+      inFlightFeePreviewRequests.delete(cacheKey);
+    }
+  },
+);
 
 // GET /api/jobs/:contractId - get job state
 router.get(

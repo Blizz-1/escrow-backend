@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { getDb } from "./db.js";
 import logger from "../utils/logger.js";
+import { FailureMonitor } from "./failure-monitor.js";
 
 // ---------------------------------------------------------------------------
 // SQLite index structures (#344)
@@ -520,104 +521,46 @@ export interface VacuumFailureMonitorOptions {
  * Every failure is logged as an error; the warning alert fires from the
  * threshold onwards so a persistent outage keeps surfacing rather than
  * alerting once and going quiet. A successful cleanup clears the state.
+ *
+ * Backed by the shared `FailureMonitor` implementation in
+ * `./failure-monitor.ts` (#722).
  */
-export class VacuumFailureMonitor {
-  readonly failureThreshold: number;
-  readonly stallThresholdMs: number;
-
-  private consecutiveFailures = 0;
-  private lastSuccessfulAt: number | null = null;
-  private alertActive = false;
-
+export class VacuumFailureMonitor extends FailureMonitor {
   constructor(options: VacuumFailureMonitorOptions = {}) {
     const env = getVacuumAlertConfig();
-    this.failureThreshold = options.failureThreshold ?? env.failureThreshold;
-    this.stallThresholdMs = options.stallThresholdMs ?? env.stallThresholdMs;
-  }
-
-  getConsecutiveFailures(): number {
-    return this.consecutiveFailures;
-  }
-
-  getLastSuccessfulAt(): number | null {
-    return this.lastSuccessfulAt;
-  }
-
-  isAlertActive(): boolean {
-    return this.alertActive;
-  }
-
-  /**
-   * Record a failed cleanup step. Returns the new consecutive-failure count.
-   * Emits an error every time and a warning alert from the threshold onwards.
-   */
-  recordFailure(
-    failureType: VacuumFailureType,
-    details: { error?: string } = {},
-  ): number {
-    this.consecutiveFailures += 1;
-
-    const payload = {
-      failureType,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      error: details.error,
-    };
-
-    logger.error("sqlite_vacuum_cleaner operation failed", payload);
-
-    if (this.consecutiveFailures >= this.failureThreshold) {
-      this.alertActive = true;
-      logger.warn(
-        "sqlite_vacuum_cleaner alert: consecutive failure threshold reached",
-        {
-          ...payload,
+    super({
+      name: "sqlite_vacuum_cleaner",
+      logComponent: "sqlite_vacuum_cleaner",
+      payloadKey: "component",
+      failureThreshold: options.failureThreshold ?? env.failureThreshold,
+      stallThresholdMs: options.stallThresholdMs ?? env.stallThresholdMs,
+      thresholdReachedOrExceeded: true,
+      onError: (_failureType, payload) => {
+        logger.error("sqlite_vacuum_cleaner operation failed", payload);
+      },
+      onAlert: (payload) => {
+        logger.warn(
+          "sqlite_vacuum_cleaner alert: consecutive failure threshold reached",
+          {
+            ...payload,
+            action:
+              "Inspect the sqlite database and disk health; alerting clears automatically after the next successful cleanup.",
+          },
+        );
+      },
+      onRecovery: (hadFailures) => {
+        if (hadFailures) {
+          logger.info("sqlite_vacuum_cleaner recovered after failures", {});
+        }
+      },
+      onStall: (info) => {
+        logger.warn("sqlite_vacuum_cleaner alert: stall threshold reached", {
+          ...info,
           action:
-            "Inspect the sqlite database and disk health; alerting clears automatically after the next successful cleanup.",
-        },
-      );
-    }
-
-    return this.consecutiveFailures;
-  }
-
-  /** Record a successful cleanup, clearing any active alert. */
-  recordSuccess(): void {
-    const hadFailures = this.consecutiveFailures > 0 || this.alertActive;
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = Date.now();
-    if (hadFailures) {
-      logger.info("sqlite_vacuum_cleaner recovered after failures", {});
-    }
-    this.alertActive = false;
-  }
-
-  /**
-   * Warn when no successful cleanup has landed inside the stall window.
-   * Does not touch the consecutive-failure counter, so a later success still
-   * recovers cleanly. Returns true when a stall was reported.
-   */
-  checkStall(): boolean {
-    if (this.lastSuccessfulAt === null) return false;
-    const elapsedMs = Date.now() - this.lastSuccessfulAt;
-    if (elapsedMs <= this.stallThresholdMs) return false;
-
-    logger.warn("sqlite_vacuum_cleaner alert: stall threshold reached", {
-      failureType: "stall" as const,
-      consecutiveFailures: this.consecutiveFailures,
-      threshold: this.failureThreshold,
-      stallThresholdMs: this.stallThresholdMs,
-      elapsedMs,
-      action:
-        "No successful vacuum cleanup within the stall window; inspect the poller and database health.",
+            "No successful vacuum cleanup within the stall window; inspect the poller and database health.",
+        });
+      },
     });
-    return true;
-  }
-
-  reset(): void {
-    this.consecutiveFailures = 0;
-    this.lastSuccessfulAt = null;
-    this.alertActive = false;
   }
 }
 
