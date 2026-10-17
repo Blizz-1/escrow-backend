@@ -78,7 +78,7 @@ Legend:
 | `src/stablecoin_cents_multiplier.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
 | `src/utils/api-response.ts` | live | — |
 | `src/utils/audit_ledger_sum_checker.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
-| `src/utils/conversion_rate_scraper.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
+| `src/utils/conversion_rate_math.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
 | `src/utils/csv-serializer.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
 | `src/utils/digit-limit-validator.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |
 | `src/utils/email_sender_activity_log.ts` | unwired | [#718](https://github.com/Goldii-locks/escrow-backend/issues/718) |

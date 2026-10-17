@@ -9,6 +9,7 @@ import webhookRoutes from "./routes/webhooks.js";
 import { runMigrations } from "./indexer/db.js";
 import { generalLimiter } from "./middleware/rateLimiter.js";
 import { startPoller } from "./indexer/poller.js";
+import { startReconciliationJob } from "./indexer/reconciliation.js";
 import { markIndexerStarted } from "./indexer/status.js";
 import logger from "./utils/logger.js";
 
@@ -77,6 +78,7 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
 runMigrations();
 markIndexerStarted();
 startPoller();
+startReconciliationJob();
 
 app.listen(PORT, () => {
   logger.info("Escrow backend started", { port: PORT });

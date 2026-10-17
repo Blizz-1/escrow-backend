@@ -278,4 +278,53 @@ describe("Webhook delivery", () => {
     expect(results.every((r) => r.success)).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
+
+  it("includes payload version 1 in the envelope (#710)", async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    addSubscription(CONTRACT_A, WEBHOOK_URL, ["funded"]);
+    insertEvent(CONTRACT_A, "funded", 100, 1000, JSON.stringify({ client: "GCLIENT" }));
+
+    const { deliverWebhooks, WEBHOOK_PAYLOAD_VERSION } = await import("../src/indexer/webhook-delivery.js");
+    await deliverWebhooks(100, 100);
+
+    expect(WEBHOOK_PAYLOAD_VERSION).toBe(1);
+    const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(callBody.version).toBe(1);
+    expect(callBody.data).toEqual({ client: "GCLIENT" });
+  });
+
+  it("reports HTTP status 503 from a failing attempt (#711)", async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 503 });
+
+    addSubscription(CONTRACT_A, WEBHOOK_URL, ["funded"]);
+    insertEvent(CONTRACT_A, "funded", 100, 1000, JSON.stringify({ client: "GCLIENT" }));
+
+    const { deliverWebhooks } = await import("../src/indexer/webhook-delivery.js");
+    const results = await deliverWebhooks(100, 100);
+
+    expect(results[0].success).toBe(false);
+    expect(results[0].status).toBe(503);
+    expect(results[0].errorCode).toBe("HTTP_503");
+    expect(typeof results[0].durationMs).toBe("number");
+  });
+
+  it("reports the DNS error code when fetch rejects with ENOTFOUND (#711)", async () => {
+    const dnsErr = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("getaddrinfo ENOTFOUND webhook-test.local"), {
+        code: "ENOTFOUND",
+      }),
+    });
+    mockFetch.mockRejectedValue(dnsErr);
+
+    addSubscription(CONTRACT_A, WEBHOOK_URL, ["funded"]);
+    insertEvent(CONTRACT_A, "funded", 100, 1000, JSON.stringify({ client: "GCLIENT" }));
+
+    const { deliverWebhooks } = await import("../src/indexer/webhook-delivery.js");
+    const results = await deliverWebhooks(100, 100);
+
+    expect(results[0].success).toBe(false);
+    expect(results[0].status).toBeUndefined();
+    expect(results[0].errorCode).toBe("ENOTFOUND");
+  });
 });
