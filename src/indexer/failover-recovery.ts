@@ -1338,7 +1338,7 @@ export interface FailoverRecoveryHistoricalRangeOptions {
     contractId: string;
     eventType: string;
     ledgerSequence: number;
-    timestamp: number;
+    timestamp: number | null;
     dataJson: string;
   }>;
   /** Per-page event source. Called once per chunk with the page's inclusive range. */
@@ -1347,14 +1347,14 @@ export interface FailoverRecoveryHistoricalRangeOptions {
       contractId: string;
       eventType: string;
       ledgerSequence: number;
-      timestamp: number;
+      timestamp: number | null;
       dataJson: string;
     }>
   > | Array<{
     contractId: string;
     eventType: string;
     ledgerSequence: number;
-    timestamp: number;
+    timestamp: number | null;
     dataJson: string;
   }>;
   pageSize?: number;
@@ -1391,7 +1391,7 @@ type FailoverRecoveryHistoricalEvent = {
   contractId: string;
   eventType: string;
   ledgerSequence: number;
-  timestamp: number;
+  timestamp: number | null;
   dataJson: string;
 };
 

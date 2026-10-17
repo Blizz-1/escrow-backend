@@ -123,15 +123,35 @@ export function getCurrentPollIntervalMs(): number {
   return currentPollIntervalMs;
 }
 
+/**
+ * Resolve an RPC event's close time to epoch seconds.
+ *
+ * Missing or unparseable `ledgerClosedAt` yields `null` (stored as NULL since
+ * migration v9) — never the wall-clock time, so backfills can't stamp old
+ * events with today's date, and invalid strings can't become NaN (#708).
+ */
+export function toEventTimestamp(ledgerClosedAt: unknown): number | null {
+  if (typeof ledgerClosedAt !== "string" || ledgerClosedAt.trim() === "") {
+    logger.warn("Indexer event missing ledgerClosedAt – storing NULL timestamp");
+    return null;
+  }
+  const millis = new Date(ledgerClosedAt).getTime();
+  if (!Number.isFinite(millis)) {
+    logger.warn("Indexer event has invalid ledgerClosedAt – storing NULL timestamp", {
+      ledgerClosedAt,
+    });
+    return null;
+  }
+  return Math.floor(millis / 1000);
+}
+
 /** Map an RPC event notification onto the row shape `events` stores. */
 function toEventRow(event: any, fallbackContractId: string): EventRow {
   return {
     contractId: event.contractId?.contractId?.() ?? fallbackContractId,
     eventType: scValToNative(event.topic[0]) as string,
     ledgerSequence: event.ledger,
-    timestamp: event.ledgerClosedAt
-      ? Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000)
-      : Math.floor(Date.now() / 1000),
+    timestamp: toEventTimestamp(event.ledgerClosedAt),
     dataJson: JSON.stringify(scValToNative(event.value)),
   };
 }
