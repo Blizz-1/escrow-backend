@@ -206,6 +206,53 @@ const MIGRATIONS: Migration[] = [
         ON events (contract_id, event_type);
     `,
   },
+  {
+    version: 9,
+    description: "make events.timestamp nullable for missing ledger close times (#708)",
+    // SQLite cannot drop NOT NULL in place, so rebuild the table. DROP TABLE
+    // also drops its indexes, so every events index from v3-v8 is recreated.
+    up: `
+      CREATE TABLE events_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        ledger_sequence INTEGER NOT NULL,
+        timestamp INTEGER,
+        data_json TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(contract_id, ledger_sequence, event_type)
+      );
+      INSERT INTO events_new
+        (id, contract_id, event_type, ledger_sequence, timestamp, data_json, created_at)
+        SELECT id, contract_id, event_type, ledger_sequence, timestamp, data_json, created_at
+        FROM events;
+      DROP TABLE events;
+      ALTER TABLE events_new RENAME TO events;
+
+      CREATE INDEX IF NOT EXISTS idx_events_contract_id
+        ON events (contract_id);
+      CREATE INDEX IF NOT EXISTS idx_events_ledger_sequence
+        ON events (ledger_sequence);
+      CREATE INDEX IF NOT EXISTS idx_events_contract_ledger
+        ON events (contract_id, ledger_sequence);
+      CREATE INDEX IF NOT EXISTS idx_events_contract_type
+        ON events (contract_id, event_type);
+      CREATE INDEX IF NOT EXISTS idx_events_ledger_event_type
+        ON events (ledger_sequence, event_type);
+      CREATE INDEX IF NOT EXISTS idx_events_created_at
+        ON events (created_at);
+      CREATE INDEX IF NOT EXISTS idx_events_contract_type_ledger
+        ON events (contract_id, event_type, ledger_sequence);
+      CREATE INDEX IF NOT EXISTS idx_events_created_at_ledger
+        ON events (created_at, ledger_sequence);
+      CREATE INDEX IF NOT EXISTS idx_events_ledger_created_at
+        ON events (ledger_sequence, created_at);
+      CREATE INDEX IF NOT EXISTS idx_events_event_type
+        ON events (event_type);
+      CREATE INDEX IF NOT EXISTS idx_events_contract_event_type
+        ON events (contract_id, event_type);
+    `,
+  },
 ];
 
 /** Index names created by the SQLite schema manager lookup-index migration (#259). */
@@ -870,7 +917,7 @@ export function insertEvent(
   contractId: string,
   eventType: string,
   ledgerSequence: number,
-  timestamp: number,
+  timestamp: number | null,
   dataJson: string
 ): boolean {
   const db = getDb();
@@ -896,7 +943,8 @@ export interface EventRow {
   contractId: string;
   eventType: string;
   ledgerSequence: number;
-  timestamp: number;
+  /** Ledger close time (epoch secs), or null when the RPC gave none. */
+  timestamp: number | null;
   dataJson: string;
 }
 
@@ -1137,7 +1185,7 @@ export interface JobSummary {
   milestone_count: number;
   latest_event_type: string;
   latest_ledger: number;
-  latest_timestamp: number;
+  latest_timestamp: number | null;
 }
 
 export interface PaginatedJobs {
@@ -1285,7 +1333,7 @@ export interface EventDbRow {
   contract_id: string;
   event_type: string;
   ledger_sequence: number;
-  timestamp: number;
+  timestamp: number | null;
   data_json: string;
   created_at: string;
 }
