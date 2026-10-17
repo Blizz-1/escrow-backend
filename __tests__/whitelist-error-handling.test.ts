@@ -485,12 +485,12 @@ describe("GET /api/jobs/:contractId/whitelist – Robust Error Handling (Issue #
     it("all error responses match the same JSON structure", async () => {
       const scenarios = [
         {
-          name: "unauthorized",
+          name: "unexpected simulation error",
           setup: () => {
-            process.env.API_KEY = "secret";
+            mockSimulateTransaction.mockResolvedValue({ error: "HostError: boom" });
           },
-          expectedStatus: 401,
-          expectedError: "Unauthorized",
+          expectedStatus: 500,
+          expectedError: "Internal server error",
         },
         {
           name: "not found",
@@ -648,55 +648,55 @@ describe("GET /api/jobs/:contractId/whitelist – Robust Error Handling (Issue #
   // Authorization and 401 Handling
   // ─────────────────────────────────────────────────────────────────────────
 
-  describe("Authorization and 401 handling", () => {
-    it("returns 401 when API key is required but missing", async () => {
+  // The whitelist is a public on-chain list and the browser cannot hold a
+  // secret, so the route deliberately takes no API key (#693).
+  describe("API key not required (#693)", () => {
+    const tokens = {
+      forEach: (fn: (item: unknown) => void) => fn({ toString: () => "TOKEN1" }),
+    };
+
+    it("returns 200 when API_KEY is configured but no key is sent", async () => {
       process.env.API_KEY = "secret-key";
+      mockSimulateTransaction.mockResolvedValue({ result: { retval: tokens } });
 
       const res = await request(buildApp())
         .get(`/api/jobs/${VALID_CONTRACT}/whitelist`)
-        .expect(401);
+        .expect(200);
 
-      expect(res.body).toEqual({
-        success: false,
-        error: "Unauthorized",
-      });
+      expect(res.body).toEqual({ success: true, data: { tokens: ["TOKEN1"] } });
     });
 
-    it("returns 401 when API key is wrong", async () => {
+    it("ignores a wrong x-api-key header instead of rejecting it", async () => {
       process.env.API_KEY = "secret-key";
+      mockSimulateTransaction.mockResolvedValue({ result: { retval: tokens } });
 
-      const res = await request(buildApp())
+      await request(buildApp())
         .get(`/api/jobs/${VALID_CONTRACT}/whitelist`)
         .set("x-api-key", "wrong-key")
-        .expect(401);
-
-      expect(res.body).toEqual({
-        success: false,
-        error: "Unauthorized",
-      });
+        .expect(200);
     });
 
-    it("does not call RPC when authorization fails", async () => {
+    it("reaches the RPC without an API key", async () => {
       process.env.API_KEY = "secret-key";
+      mockSimulateTransaction.mockResolvedValue({ result: { retval: tokens } });
 
       await request(buildApp())
         .get(`/api/jobs/${VALID_CONTRACT}/whitelist`)
-        .expect(401);
+        .expect(200);
 
-      expect(mockGetAccount).not.toHaveBeenCalled();
-      expect(mockSimulateTransaction).not.toHaveBeenCalled();
+      expect(mockGetAccount).toHaveBeenCalled();
+      expect(mockSimulateTransaction).toHaveBeenCalled();
     });
 
-    it("logs warn for unauthorized requests", async () => {
+    it("does not log an unauthorized warning for key-less requests", async () => {
       process.env.API_KEY = "secret-key";
+      mockSimulateTransaction.mockResolvedValue({ result: { retval: tokens } });
 
       await request(buildApp())
         .get(`/api/jobs/${VALID_CONTRACT}/whitelist`)
-        .expect(401);
+        .expect(200);
 
-      expect(mockLoggerWarn).toHaveBeenCalledWith("Unauthorized request", {
-        contractId: VALID_CONTRACT,
-      });
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith("Unauthorized request", expect.anything());
     });
   });
 });

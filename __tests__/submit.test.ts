@@ -254,15 +254,15 @@ describe("POST /api/jobs/submit – error sanitization", () => {
     expect(typeof res.body.error).toBe("string");
   });
 
-  it("returns sanitized 500 for timeout errors", async () => {
+  it("returns a sanitized 504 for upstream timeout errors (#691)", async () => {
     mockSendTransaction.mockRejectedValue(new Error("Request timeout after 30000ms"));
 
     const res = await request(buildApp())
       .post("/api/jobs/submit")
       .send({ signedXdr: VALID_SIGNED_XDR })
-      .expect(500);
+      .expect(504);
 
-    expect(res.body).toEqual({ success: false, error: "Internal server error" });
+    expect(res.body).toEqual({ success: false, error: "Upstream RPC timeout" });
     expect(JSON.stringify(res.body)).not.toContain("30000ms");
   });
 

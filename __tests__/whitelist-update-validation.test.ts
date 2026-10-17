@@ -395,28 +395,28 @@ describe("POST /api/jobs/:contractId/whitelist/update – schema validation", ()
   // API key gate
   // ─────────────────────────────────────────────────────────────────────────
 
-  describe("API key authorization", () => {
-    it("returns 401 when API_KEY is set and header is missing", async () => {
+  // The route only builds an unsigned XDR the admin's wallet must sign, so it
+  // takes no API key (#693); authorization is the contract's admin check.
+  describe("API key not required (#693)", () => {
+    it("proceeds past auth when API_KEY is set and the header is missing", async () => {
       process.env.API_KEY = "secret";
 
       const res = await request(buildApp())
         .post(`/api/jobs/${VALID_CONTRACT}/whitelist/update`)
-        .send(validBody())
-        .expect(401);
+        .send(validBody());
 
-      expect(res.body).toEqual({ success: false, error: "Unauthorized" });
+      expect(res.status).not.toBe(401);
     });
 
-    it("returns 401 when API_KEY is set and wrong key is provided", async () => {
+    it("ignores a wrong x-api-key header instead of rejecting it", async () => {
       process.env.API_KEY = "secret";
 
       const res = await request(buildApp())
         .post(`/api/jobs/${VALID_CONTRACT}/whitelist/update`)
         .set("x-api-key", "wrong")
-        .send(validBody())
-        .expect(401);
+        .send(validBody());
 
-      expect(res.body).toEqual({ success: false, error: "Unauthorized" });
+      expect(res.status).not.toBe(401);
     });
 
     it("proceeds past auth when the correct API key is provided", async () => {
