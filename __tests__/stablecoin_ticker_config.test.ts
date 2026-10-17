@@ -1,12 +1,14 @@
 import {
   ERROR_CODES,
-  MAX_SAFE_DIGITS,
   DEFAULT_STABLECOIN_CONFIG,
   STABLECOIN_CONFIGS,
   getStablecoinConfig,
   stablecoin_cents_multiplier,
   toCents,
 } from "../src/utils/stablecoin_cents_multiplier.js";
+
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
 
 describe("stablecoin_cents_multiplier ticker configuration (#479)", () => {
   describe("getStablecoinConfig", () => {
@@ -70,8 +72,9 @@ describe("stablecoin_cents_multiplier ticker configuration (#479)", () => {
       expect(toCents(Number.NaN, "USDC").ok).toBe(false);
     });
 
-    it("rejects results that exceed the digit limit", () => {
-      const result = toCents("9".repeat(MAX_SAFE_DIGITS), "USDC");
+    it("rejects results that leave the i128 range", () => {
+      // Whole units at i128 max overflow once scaled to cents.
+      const result = toCents(I128_MAX, "USDC");
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.code).toBe(ERROR_CODES.CONVERSION_OVERFLOW);

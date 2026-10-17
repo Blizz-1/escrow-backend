@@ -9,6 +9,9 @@ import {
 } from "../src/utils/refund_ratio_helper.js";
 import { validateErrorStructure } from "../src/utils/conversion_rate_math.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+
 describe("refund_ratio_helper validation and calculations", () => {
   function expectDefinedError(
     result: ReturnType<typeof applyRefundRatio>,
@@ -35,12 +38,12 @@ describe("refund_ratio_helper validation and calculations", () => {
     });
 
     it("rejects excessive digits with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateRefundRatio(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -94,27 +97,6 @@ describe("refund_ratio_helper validation and calculations", () => {
       expect(applyRefundRatio(5, 5_000)).toEqual({ ok: true, value: 2n });
     });
 
-    it("returns a defined calculation exception when result formatting fails", () => {
-      const originalToString = BigInt.prototype.toString;
-      const result = (() => {
-        try {
-          BigInt.prototype.toString = () => {
-            throw new Error("forced formatting failure");
-          };
-          return applyRefundRatio(100, 2_500);
-        } finally {
-          BigInt.prototype.toString = originalToString;
-        }
-      })();
-
-      expectDefinedError(result, ERROR_CODES.CALCULATION_EXCEPTION, "applyRefundRatio");
-      if (!result.ok) {
-        expect(result.details).toEqual({
-          context: { amount: 100, ratio: 2_500 },
-          reason: "forced formatting failure",
-        });
-      }
-    });
 
     it("allows the maximum supported amount at the 100% boundary", () => {
       const amount = "9".repeat(MAX_SAFE_DIGITS);
@@ -136,8 +118,8 @@ describe("refund_ratio_helper validation and calculations", () => {
     });
 
     it("rejects excessive digits with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
-      expectDefinedError(applyRefundRatio(excessive, 1), ERROR_CODES.EXCESSIVE_DIGITS, "amount");
+      const excessive = OVER_I128;
+      expectDefinedError(applyRefundRatio(excessive, 1), ERROR_CODES.AMOUNT_OUT_OF_RANGE, "amount");
     });
 
     it("keeps asymmetric refund shares additive for complementary ratios", () => {
@@ -151,17 +133,17 @@ describe("refund_ratio_helper validation and calculations", () => {
     });
 
     it("blocks excessive digits on either operand", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const badAmount = applyRefundRatio(excessive, "1");
       expect(badAmount.ok).toBe(false);
       if (!badAmount.ok) {
-        expect(badAmount.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badAmount.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
 
       const badRatio = applyRefundRatio("1", excessive);
       expect(badRatio.ok).toBe(false);
       if (!badRatio.ok) {
-        expect(badRatio.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badRatio.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 

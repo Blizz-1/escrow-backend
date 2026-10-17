@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { divRound } from "./rounding.js";
+import { isAmountWithinRange } from "./digit-limit-validator.js";
 
 /**
  * Fee deduction calculator and fee share calculation checker with
@@ -24,6 +25,7 @@ const SHARE_SCALE = 1_000_000;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "FEE_CALCULATOR_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "FEE_CALCULATOR_INVALID_AMOUNT",
   INVALID_FEE_RATE: "FEE_CALCULATOR_INVALID_FEE_RATE",
   INVALID_SHARES: "FEE_CALCULATOR_INVALID_SHARES",
@@ -89,11 +91,6 @@ export type FeeShareCheckOutcome =
     }
   | { ok: false; error: string; code: FeeCalculatorErrorCode };
 
-function digitCount(normalized: string): number {
-  const digits = normalized.replace(/^-/, "").replace(/^0+(?=\d)/, "");
-  return digits.length === 0 ? 1 : digits.length;
-}
-
 /**
  * Parse and validate an amount string/number/bigint against digit limits.
  */
@@ -113,6 +110,15 @@ export function validateAmount(
         code: ERROR_CODES.INVALID_AMOUNT,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_AMOUNT,
+      };
+    }
     raw = String(input);
   } else {
     raw = input.trim();
@@ -125,11 +131,11 @@ export function validateAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -165,6 +171,15 @@ export function validateFeeRate(
         code: ERROR_CODES.INVALID_FEE_RATE,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_FEE_RATE,
+      };
+    }
     raw = String(input);
   } else {
     raw = input.trim();
@@ -177,11 +192,11 @@ export function validateFeeRate(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 
@@ -274,14 +289,6 @@ export function calculateFeeDeduction(
   }
 
   const product = gross * rate;
-  if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-    return {
-      ok: false,
-      error: "fee calculation would overflow during multiplication",
-      code: ERROR_CODES.CALCULATION_OVERFLOW,
-    };
-  }
-
   const feeAmount = product / sc;
   if (feeAmount > gross) {
     return {
@@ -347,15 +354,6 @@ export function calculateFeeShares(
   for (let i = 0; i < scaledNumerators.length; i++) {
     const numerator = scaledNumerators[i];
     const product = total * numerator;
-
-    if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-      return {
-        ok: false,
-        error: `fee share calculation for shares[${i}] would overflow during multiplication`,
-        code: ERROR_CODES.CALCULATION_OVERFLOW,
-      };
-    }
-
     const shareAmount = product / scaledDenominator;
     feeShares.push(shareAmount);
     allocatedSum += shareAmount;
@@ -415,15 +413,6 @@ export function calculateFeeShareDeductions(
   for (let i = 0; i < scaledNumerators.length; i++) {
     const numerator = scaledNumerators[i];
     const product = gross * numerator;
-
-    if (digitCount(product.toString()) > MAX_INTERMEDIATE_DIGITS) {
-      return {
-        ok: false,
-        error: `fee share deduction for shares[${i}] would overflow during multiplication`,
-        code: ERROR_CODES.CALCULATION_OVERFLOW,
-      };
-    }
-
     const shareAmount = product / scaledDenominator;
     feeShares.push(shareAmount);
     totalFee += shareAmount;
@@ -476,10 +465,10 @@ export function checkFeeShareCalculation(
     }
 
     const next = totalFee + shareCheck.value;
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `total fee sum exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "total fee sum exceeds the i128 amount range",
         code: ERROR_CODES.CALCULATION_OVERFLOW,
       };
     }
@@ -557,6 +546,15 @@ export function validateBaseAmount(
         code: ERROR_CODES.INVALID_AMOUNT,
       };
     }
+    // A JS number above 2^53 has already lost precision; large amounts
+    // must arrive as strings or bigints.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: ERROR_CODES.INVALID_AMOUNT,
+      };
+    }
     raw = String(input);
   } else {
     if (typeof input !== "string") {
@@ -576,11 +574,11 @@ export function validateBaseAmount(
     }
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
-      code: ERROR_CODES.EXCESSIVE_DIGITS,
+      error: `${label} exceeds the i128 amount range`,
+      code: ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     };
   }
 

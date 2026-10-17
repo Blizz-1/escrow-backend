@@ -7,9 +7,9 @@
  */
 
 import {
-  digitCount,
   parseIntegerInput,
   MAX_SAFE_DIGITS,
+  isAmountWithinRange,
 } from "./digit-limit-validator.js";
 
 export { MAX_SAFE_DIGITS };
@@ -35,6 +35,7 @@ export const ROUNDING_MODE = "half-even" as const;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_RATE: "OVERFLOW_INVALID_RATE",
   PRODUCT_OVERFLOW: "OVERFLOW_PRODUCT_EXCEEDED",
   SUM_MISMATCH: "OVERFLOW_SUM_MISMATCH",
@@ -106,7 +107,7 @@ export function validateInterestRate(
     rate,
     "rate",
     ERROR_CODES.INVALID_RATE,
-    ERROR_CODES.EXCESSIVE_DIGITS,
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     {
       nonNegative: true,
       missingCode: ERROR_CODES.MISSING_PARAMETER,
@@ -127,7 +128,7 @@ export function validateYieldAmount(
     input,
     label,
     ERROR_CODES.INVALID_AMOUNT,
-    ERROR_CODES.EXCESSIVE_DIGITS,
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     {
       nonNegative: true,
       missingCode: ERROR_CODES.MISSING_PARAMETER,
@@ -149,7 +150,7 @@ export function validatePrincipal(
     principal,
     label,
     ERROR_CODES.INVALID_AMOUNT,
-    ERROR_CODES.EXCESSIVE_DIGITS,
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     {
       nonNegative: true,
       missingCode: ERROR_CODES.MISSING_PARAMETER,
@@ -180,9 +181,9 @@ export function estimateInterestYield(
 
   try {
     const product = amount.value * factor.value;
-    if (digitCount(product.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(product)) {
       return failure(
-        `yield estimate exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        "yield estimate exceeds the i128 amount range",
         ERROR_CODES.PRODUCT_OVERFLOW,
         "product"
       );

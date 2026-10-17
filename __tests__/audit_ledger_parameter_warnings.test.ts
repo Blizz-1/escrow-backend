@@ -1,6 +1,5 @@
 import {
   ERROR_CODES,
-  MAX_SAFE_DIGITS,
   PARAMETER_ERROR_BODY_KEYS,
   PARAMETER_ERROR_DEFINITIONS,
   PARAMETER_WARNING_CODES,
@@ -12,6 +11,9 @@ import {
   type ParameterWarning,
   type ParameterWarningCode,
 } from "../src/utils/audit_ledger_sum_checker.js";
+
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
 
 const ALL_CODES = Object.values(PARAMETER_WARNING_CODES) as ParameterWarningCode[];
 
@@ -69,10 +71,10 @@ describe("audit_ledger_sum_checker parameter warning codes", () => {
     });
 
     it("maps an over-long ledger entry back to the overflow code", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const warnings = collectParameterWarnings({ amounts: [tooBig] });
       expect(warnings[0].code).toBe(PARAMETER_WARNING_CODES.AMOUNT_EXCESSIVE_DIGITS);
-      expect(warnings[0].calculationCode).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+      expect(warnings[0].calculationCode).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
     });
 
     it("flags negative amounts in a list and on their own", () => {

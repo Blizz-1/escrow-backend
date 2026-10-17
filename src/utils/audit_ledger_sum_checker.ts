@@ -7,15 +7,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  digitCount,
   parseIntegerInput,
   MAX_SAFE_DIGITS,
+  isAmountWithinRange,
 } from "./digit-limit-validator.js";
 
 export { MAX_SAFE_DIGITS };
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_AMOUNT: "OVERFLOW_INVALID_AMOUNT",
   SUM_OVERFLOW: "OVERFLOW_SUM_EXCEEDED",
   ROUNDING_INVALID_INPUT: "ROUNDING_INVALID_INPUT",
@@ -304,7 +305,7 @@ export function validateLedgerAmount(
     input,
     label,
     ERROR_CODES.INVALID_AMOUNT,
-    ERROR_CODES.EXCESSIVE_DIGITS
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE
   );
 
   if (!parsed.ok) {
@@ -349,10 +350,10 @@ export function sumLedgerAmounts(
     }
 
     const next = total + checked.value;
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `ledger sum exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "ledger sum exceeds the i128 amount range",
         code: ERROR_CODES.SUM_OVERFLOW,
       };
     }
@@ -407,10 +408,10 @@ export function assertLedgerSplitSum(
       return splitCheck;
     }
     const next = total + splitCheck.value;
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `split total exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "split total exceeds the i128 amount range",
         code: ERROR_CODES.SUM_OVERFLOW,
       };
     }
@@ -439,6 +440,7 @@ export type RoundingErrorCode =
   | typeof ERROR_CODES.ROUNDING_INVALID_INPUT
   | typeof ERROR_CODES.ROUNDING_SCALE_INVALID
   | typeof ERROR_CODES.EXCESSIVE_DIGITS
+  | typeof ERROR_CODES.AMOUNT_OUT_OF_RANGE
   | typeof ERROR_CODES.INVALID_AMOUNT;
 
 export type RoundingResult =
@@ -840,7 +842,9 @@ export function collectParameterWarnings(input: {
           return;
         }
 
-        const isDigits = checked.code === ERROR_CODES.EXCESSIVE_DIGITS;
+        const isDigits =
+          checked.code === ERROR_CODES.EXCESSIVE_DIGITS ||
+          checked.code === ERROR_CODES.AMOUNT_OUT_OF_RANGE;
         warnings.push(
           warn(
             isDigits ? PARAMETER_WARNING_CODES.AMOUNT_EXCESSIVE_DIGITS : PARAMETER_WARNING_CODES.ENTRY_INVALID,
@@ -871,7 +875,9 @@ export function collectParameterWarnings(input: {
           )
         );
       } else if (!checked.ok) {
-        const isDigits = checked.code === ERROR_CODES.EXCESSIVE_DIGITS;
+        const isDigits =
+          checked.code === ERROR_CODES.EXCESSIVE_DIGITS ||
+          checked.code === ERROR_CODES.AMOUNT_OUT_OF_RANGE;
         warnings.push(
           warn(
             isDigits ? PARAMETER_WARNING_CODES.AMOUNT_EXCESSIVE_DIGITS : PARAMETER_WARNING_CODES.AMOUNT_NOT_INTEGER,
@@ -1378,10 +1384,10 @@ export function buildAuditLedgerCsvBlock(
     }
 
     const next = runningTotal + amountCheck.value;
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `ledger sum exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "ledger sum exceeds the i128 amount range",
         code: ERROR_CODES.SUM_OVERFLOW,
       };
     }

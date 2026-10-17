@@ -15,6 +15,14 @@
 /** Max decimal digits allowed for a single amount (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
 
+export const MAX_AMOUNT = 2n ** 127n - 1n;
+export const MIN_AMOUNT = -(2n ** 127n);
+export const AMOUNT_OUT_OF_RANGE = "AMOUNT_OUT_OF_RANGE" as const;
+
+export function isAmountWithinRange(value: bigint): boolean {
+  return value >= MIN_AMOUNT && value <= MAX_AMOUNT;
+}
+
 export type SharedValidationResult<TCode extends string> =
   | { ok: true; value: bigint }
   | { ok: false; error: string; code: TCode };
@@ -29,12 +37,12 @@ export function digitCount(normalized: string): number {
 }
 
 /**
- * Parse and validate an integer string/number/bigint against digit limits.
+ * Parse and validate an integer string/number/bigint against the i128 range.
  *
  * @param input - value to parse
  * @param label - human-readable label used in error messages
  * @param invalidCode - caller's invalid-input error code (codes differ per caller)
- * @param excessiveCode - caller's excessive-digits error code
+ * @param excessiveCode - caller's out-of-range error code (AMOUNT_OUT_OF_RANGE)
  * @param options - optional non-negative, missing-value, and type policies
  */
 export function parseIntegerInput<TCode extends string>(
@@ -68,6 +76,15 @@ export function parseIntegerInput<TCode extends string>(
         code: invalidCode,
       };
     }
+    // A JS number above 2^53 has already lost precision, so it cannot be
+    // trusted as an exact amount; large amounts must arrive as strings.
+    if (!Number.isSafeInteger(input)) {
+      return {
+        ok: false,
+        error: `${label} exceeds Number.MAX_SAFE_INTEGER; pass large amounts as a string or bigint`,
+        code: invalidCode,
+      };
+    }
     raw = String(input);
   } else if (typeof input === "string") {
     raw = input.trim();
@@ -86,10 +103,10 @@ export function parseIntegerInput<TCode extends string>(
     };
   }
 
-  if (digitCount(raw) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(BigInt(raw))) {
     return {
       ok: false,
-      error: `${label} exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: `${label} exceeds the i128 amount range`,
       code: excessiveCode,
     };
   }

@@ -26,6 +26,11 @@ import {
   KNOWN_ASSETS,
 } from "../src/utils/audit_ledger_sum_checker.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
+
 // ---------------------------------------------------------------------------
 // Existing overflow validation tests
 // ---------------------------------------------------------------------------
@@ -46,12 +51,12 @@ describe("audit_ledger_sum_checker overflow validation", () => {
     });
 
     it("rejects excessive digits with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateLedgerAmount(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -82,16 +87,16 @@ describe("audit_ledger_sum_checker overflow validation", () => {
     });
 
     it("blocks an entry with excessive digits before summing", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = sumLedgerAmounts(["1", excessive]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("blocks when the running sum overflows the digit limit", () => {
-      const half = "9".repeat(MAX_SAFE_DIGITS);
+      const half = I128_MAX;
       const result = sumLedgerAmounts([half, half]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -286,11 +291,11 @@ describe("audit_ledger_sum_checker rounding policies", () => {
     });
 
     it("rejects an amount with excessive digits", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = divideWithRounding(excessive, 2);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
   });
@@ -349,11 +354,11 @@ describe("audit_ledger_sum_checker rounding policies", () => {
     });
 
     it("rejects an amount exceeding the digit limit", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = applyRoundedScale(excessive, "1", "2");
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -448,11 +453,11 @@ describe("audit_ledger_sum_checker DB-column formatting", () => {
     });
 
     it("rejects excessive-digit totals", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = formatLedgerRowForDb("1", excessive, 0);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -545,11 +550,11 @@ describe("audit_ledger_sum_checker split-sum assertions", () => {
   });
 
   it("rejects splits with excessive digits before summing", () => {
-    const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+    const excessive = OVER_I128;
     const result = assertLedgerSplitSum(["1", excessive], "1");
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+      expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
     }
   });
 
@@ -562,7 +567,7 @@ describe("audit_ledger_sum_checker split-sum assertions", () => {
   });
 
   it("blocks a running total that overflows the digit limit", () => {
-    const half = "9".repeat(MAX_SAFE_DIGITS);
+    const half = I128_MAX;
     const result = assertLedgerSplitSum([half, half], half);
     expect(result.ok).toBe(false);
     if (!result.ok) {

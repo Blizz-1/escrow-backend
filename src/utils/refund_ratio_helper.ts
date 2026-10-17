@@ -9,9 +9,9 @@ import fs from "fs";
 import path from "path";
 import { escapeCSVField } from "./csv-serializer.js";
 import {
-  digitCount,
   parseIntegerInput,
   MAX_SAFE_DIGITS,
+  isAmountWithinRange,
 } from "./digit-limit-validator.js";
 
 export { MAX_SAFE_DIGITS };
@@ -21,6 +21,7 @@ export const DEFAULT_REFUND_SCALE = 10_000;
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_RATIO: "OVERFLOW_INVALID_RATIO",
   INVALID_AMOUNT: "OVERFLOW_INVALID_AMOUNT",
   PRODUCT_OVERFLOW: "OVERFLOW_PRODUCT_EXCEEDED",
@@ -92,7 +93,7 @@ export function validateRefundRatio(
     ratio,
     "ratio",
     ERROR_CODES.INVALID_RATIO,
-    ERROR_CODES.EXCESSIVE_DIGITS,
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     {
       nonNegative: true,
       missingCode: ERROR_CODES.MISSING_PARAMETER,
@@ -115,7 +116,7 @@ export function validateRefundAmount(amount: unknown): ValidationResult {
     amount,
     "amount",
     ERROR_CODES.INVALID_AMOUNT,
-    ERROR_CODES.EXCESSIVE_DIGITS,
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE,
     {
       nonNegative: true,
       missingCode: ERROR_CODES.MISSING_PARAMETER,
@@ -145,13 +146,6 @@ export function applyRefundRatio(
 
   try {
     const numerator = principal.value * factor.value;
-    if (digitCount(numerator.toString()) > MAX_INTERMEDIATE_DIGITS) {
-      return failure(
-        `refund calculation exceeds maximum of ${MAX_INTERMEDIATE_DIGITS} intermediate digits`,
-        ERROR_CODES.PRODUCT_OVERFLOW,
-        "product"
-      );
-    }
 
     const scale = BigInt(DEFAULT_REFUND_SCALE);
     const quotient = numerator / scale;
@@ -163,9 +157,9 @@ export function applyRefundRatio(
         ? quotient + 1n
         : quotient;
 
-    if (digitCount(refund.toString()) > MAX_SAFE_DIGITS) {
+    if (!isAmountWithinRange(refund)) {
       return failure(
-        `refund share exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        "refund share exceeds the i128 amount range",
         ERROR_CODES.PRODUCT_OVERFLOW,
         "refund"
       );

@@ -1,6 +1,5 @@
 import { jest } from "@jest/globals";
 import {
-  MAX_SAFE_DIGITS,
   ERROR_CODES,
   validateConversionRate,
   applyConversionRate,
@@ -19,6 +18,11 @@ import {
   type ErrorDefinition,
 } from "../src/utils/conversion_rate_math.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
+
 // ---------------------------------------------------------------------------
 // Existing overflow validation tests
 // ---------------------------------------------------------------------------
@@ -34,12 +38,12 @@ describe("conversion_rate_math overflow validation", () => {
     });
 
     it("rejects excessive digits with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateConversionRate(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -71,22 +75,22 @@ describe("conversion_rate_math overflow validation", () => {
     });
 
     it("blocks excessive digits on either operand", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const badNotional = applyConversionRate(excessive, "1");
       expect(badNotional.ok).toBe(false);
       if (!badNotional.ok) {
-        expect(badNotional.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badNotional.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
 
       const badRate = applyConversionRate("1", excessive);
       expect(badRate.ok).toBe(false);
       if (!badRate.ok) {
-        expect(badRate.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(badRate.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("blocks when the product overflows the digit limit", () => {
-      const large = "9".repeat(MAX_SAFE_DIGITS);
+      const large = I128_MAX;
       const result = applyConversionRate(large, "10");
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -293,11 +297,11 @@ describe("conversion_rate_math CSV exporters", () => {
 
     it("rejects a row with an excessive-digit rate", () => {
       const result = exportConversionRatesToCsv([
-        { pair: "XLM/USDC", rate: "1" + "0".repeat(MAX_SAFE_DIGITS) },
+        { pair: "XLM/USDC", rate: OVER_I128 },
       ]);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
@@ -428,16 +432,16 @@ describe("conversion_rate_math split-sum assertions", () => {
     });
 
     it("rejects a split entry that exceeds the digit limit", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = assertConversionSplitSum([excessive], "100");
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("rejects when the running total would overflow the digit limit", () => {
-      const large = "9".repeat(MAX_SAFE_DIGITS);
+      const large = I128_MAX;
       const result = assertConversionSplitSum([large, large], large);
       expect(result.ok).toBe(false);
       if (!result.ok) {

@@ -73,6 +73,7 @@ import {
 } from "../schemas/jobs.js";
 import { strictLimiter, walletLookupLimiter } from "../middleware/rateLimiter.js";
 import logger from "../utils/logger.js";
+import { isValidStellarContractId } from "../utils/stellar.js";
 import { randomUUID } from "crypto";
 
 const router = Router();
@@ -567,7 +568,87 @@ router.post(
   },
 );
 
+// ---------------------------------------------------------------------------
+// GET|POST /api/jobs/query – allowlisted read-only contract views (#696)
+// ---------------------------------------------------------------------------
+// The frontend calls this path; arbitrary method simulation is never allowed.
+const READ_ONLY_QUERY_METHODS = new Set([
+  "is_paused",
+  "get_whitelisted_tokens",
+  "get_platform_fee_allocation",
+]);
+
+async function handleReadOnlyQuery(req: Request, res: Response): Promise<void> {
+  const contractId = req.method === "GET" ? req.query.contractId : req.body?.contractId;
+  const method = req.method === "GET" ? req.query.method : req.body?.method;
+  if (typeof contractId !== "string" || !contractId.trim()) {
+    sendError(res, 400, "contractId is required");
+    return;
+  }
+  if (!isValidStellarContractId(contractId)) {
+    sendError(res, 400, "contractId must be a valid Stellar contract address (C...)");
+    return;
+  }
+  if (typeof method !== "string" || !READ_ONLY_QUERY_METHODS.has(method)) {
+    sendError(res, 400, "Unsupported query method");
+    return;
+  }
+
+  try {
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(process.env.DEPLOYER_ADDRESS || "");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call(method))
+      .setTimeout(30)
+      .build();
+    const result = await server.simulateTransaction(tx);
+
+    if ("error" in result) {
+      const { status, message } = classifySimError(String(result.error));
+      sendError(res, status, message);
+      return;
+    }
+    if (!("result" in result) || !result.result?.retval) {
+      sendError(res, 500, "Internal server error");
+      return;
+    }
+
+    // i128/u64 values decode to bigint, which JSON cannot carry; send strings.
+    sendSuccess(res, {
+      contractId,
+      method,
+      result: convertScValToNativeStrings(scValToNative(result.result.retval)),
+    });
+  } catch (err: unknown) {
+    logger.error("Read-only contract query failed", {
+      contractId,
+      method,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendError(res, 500, "Internal server error");
+  }
+}
+
+router.get("/query", jobContractCors, jobContractSecurityHeaders, jobContractRateLimit, handleReadOnlyQuery);
+router.post("/query", jobContractCors, jobContractSecurityHeaders, jobContractRateLimit, handleReadOnlyQuery);
+
+// GET /api/jobs/whitelisted-tokens?contractId= – alias the frontend calls (#696).
+router.get("/whitelisted-tokens", (req: Request, res: Response) => {
+  const contractId = req.query.contractId;
+  if (typeof contractId !== "string" || !contractId.trim()) {
+    sendError(res, 400, "contractId is required");
+    return;
+  }
+  // Redirect relative to wherever this router is mounted (/api/jobs or
+  // /api/v1/jobs), not to the site root.
+  res.redirect(307, `${req.baseUrl}/${encodeURIComponent(contractId)}/whitelist`);
+});
+
 // GET /api/jobs/:contractId/history - event timeline for a single job
+
 router.get("/:contractId/history", (req: Request, res: Response) => {
   try {
     const contractId = req.params.contractId as string;
@@ -1476,7 +1557,10 @@ router.post(
 // Validates route parameters using contractMilestoneParamsSchema.
 // ---------------------------------------------------------------------------
 router.get(
-  "/:contractId/milestones/:index/time-remaining",
+  [
+    "/:contractId/milestones/:index/time-remaining",
+    "/:contractId/milestones/:index/auto-release",
+  ],
   timeRemainingCors,
   timeRemainingSecurityHeaders,
   timeRemainingRateLimit,

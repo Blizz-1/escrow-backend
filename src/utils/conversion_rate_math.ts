@@ -35,9 +35,9 @@
  */
 
 import {
-  digitCount,
   parseIntegerInput,
   MAX_SAFE_DIGITS,
+  isAmountWithinRange,
 } from "./digit-limit-validator.js";
 import { divRound } from "./rounding.js";
 
@@ -45,6 +45,7 @@ export { MAX_SAFE_DIGITS };
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "OVERFLOW_EXCESSIVE_DIGITS",
+  AMOUNT_OUT_OF_RANGE: "AMOUNT_OUT_OF_RANGE",
   INVALID_RATE: "OVERFLOW_INVALID_RATE",
   PRODUCT_OVERFLOW: "OVERFLOW_PRODUCT_EXCEEDED",
   RATE_LIMIT_EXCEEDED: "RATE_LIMIT_EXCEEDED",
@@ -200,7 +201,7 @@ export function validateConversionRate(
     rate,
     "rate",
     ERROR_CODES.INVALID_RATE,
-    ERROR_CODES.EXCESSIVE_DIGITS
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE
   );
   if (!parsed.ok) {
     return parsed;
@@ -227,7 +228,7 @@ export function applyConversionRate(
     notional,
     "notional",
     ERROR_CODES.INVALID_RATE,
-    ERROR_CODES.EXCESSIVE_DIGITS
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE
   );
   if (!amount.ok) {
     return amount;
@@ -246,10 +247,10 @@ export function applyConversionRate(
   }
 
   const product = amount.value * factor.value;
-  if (digitCount(product.toString()) > MAX_SAFE_DIGITS) {
+  if (!isAmountWithinRange(product)) {
     return {
       ok: false,
-      error: `converted value exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+      error: "converted value exceeds the i128 amount range",
       code: ERROR_CODES.PRODUCT_OVERFLOW,
     };
   }
@@ -683,7 +684,7 @@ export function assertConversionSplitSum(
     expectedBase,
     "expectedBase",
     ERROR_CODES.INVALID_AMOUNT,
-    ERROR_CODES.EXCESSIVE_DIGITS
+    ERROR_CODES.AMOUNT_OUT_OF_RANGE
   );
   if (!baseCheck.ok) {
     return baseCheck;
@@ -696,18 +697,18 @@ export function assertConversionSplitSum(
       splits[i],
       `splits[${i}]`,
       ERROR_CODES.INVALID_AMOUNT,
-      ERROR_CODES.EXCESSIVE_DIGITS
+      ERROR_CODES.AMOUNT_OUT_OF_RANGE
     );
     if (!splitCheck.ok) {
       return splitCheck;
     }
 
     const next = total + splitCheck.value;
-    // Guard against the running total itself overflowing the digit limit.
-    if (digitCount(next.toString()) > MAX_SAFE_DIGITS) {
+    // Guard against the running total itself leaving the i128 range.
+    if (!isAmountWithinRange(next)) {
       return {
         ok: false,
-        error: `split total exceeds maximum of ${MAX_SAFE_DIGITS} digits`,
+        error: "split total exceeds the i128 amount range",
         code: ERROR_CODES.PRODUCT_OVERFLOW,
       };
     }
@@ -1031,7 +1032,7 @@ export function validateCalculationParameters(
       notional as string | number | bigint,
       "notional",
       ERROR_CODES.INVALID_RATE,
-      ERROR_CODES.EXCESSIVE_DIGITS
+      ERROR_CODES.AMOUNT_OUT_OF_RANGE
     );
     if (!notionalRes.ok) {
       return {

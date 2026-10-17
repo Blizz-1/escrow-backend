@@ -7,6 +7,11 @@ import {
   applyStablecoinCentsMultiplier,
 } from "../src/utils/stablecoin_cents_multiplier.js";
 
+// Smallest amount outside the contract's i128 range (i128 max + 1).
+const OVER_I128 = (2n ** 127n).toString();
+// The largest amount the contract accepts.
+const I128_MAX = (2n ** 127n - 1n).toString();
+
 describe("stablecoin_cents_multiplier overflow validation and decimal rounding", () => {
   describe("validateMultiplier", () => {
     it("accepts multipliers within the digit limit", () => {
@@ -27,12 +32,12 @@ describe("stablecoin_cents_multiplier overflow validation and decimal rounding",
     });
 
     it("rejects excessive digits (>15) with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateMultiplier(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum of 15 digits/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -65,12 +70,12 @@ describe("stablecoin_cents_multiplier overflow validation and decimal rounding",
     });
 
     it("rejects excessive digits (>15) with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateStablecoinCents(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum of 15 digits/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -112,12 +117,12 @@ describe("stablecoin_cents_multiplier overflow validation and decimal rounding",
     });
 
     it("rejects excessive digits (>15) with OVERFLOW_EXCESSIVE_DIGITS", () => {
-      const tooBig = "1" + "0".repeat(MAX_SAFE_DIGITS);
+      const tooBig = OVER_I128;
       const result = validateDivisor(tooBig);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
-        expect(result.error).toMatch(/exceeds maximum of 15 digits/i);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
+        expect(result.error).toMatch(/i128 amount range/i);
       }
     });
 
@@ -151,40 +156,49 @@ describe("stablecoin_cents_multiplier overflow validation and decimal rounding",
     });
 
     it("blocks excessive digits on amount operand before arithmetic", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = applyStablecoinCentsMultiplier(excessive, "2");
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
     it("blocks excessive digits on multiplier operand before arithmetic", () => {
-      const excessive = "9".repeat(MAX_SAFE_DIGITS + 1);
+      const excessive = OVER_I128;
       const result = applyStablecoinCentsMultiplier("100", excessive);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
-    it("blocks product overflow when product exceeds 15 digits", () => {
-      const largeAmount = "9".repeat(MAX_SAFE_DIGITS);
+    it("blocks product overflow when the product leaves the i128 range", () => {
+      const largeAmount = I128_MAX;
       const result = applyStablecoinCentsMultiplier(largeAmount, "10");
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.code).toBe(ERROR_CODES.PRODUCT_OVERFLOW);
-        expect(result.error).toMatch(/multiplied cents value exceeds maximum of 15 digits/i);
+        expect(result.error).toMatch(/multiplied cents value exceeds the i128 amount range/i);
       }
     });
 
-    it("regression test: blocks dangerous input before arithmetic overflow can occur", () => {
-      const unsafeAmount = "99999999999999999999999999999";
-      const unsafeMultiplier = "99999999999999999999999999999";
-      const result = applyStablecoinCentsMultiplier(unsafeAmount, unsafeMultiplier);
+    it("regression test: rejects a product that leaves the i128 range", () => {
+      // Both 29-digit operands fit in i128; their 58-digit product does not.
+      const bigAmount = "99999999999999999999999999999";
+      const bigMultiplier = "99999999999999999999999999999";
+      const result = applyStablecoinCentsMultiplier(bigAmount, bigMultiplier);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe(ERROR_CODES.EXCESSIVE_DIGITS);
+        expect(result.code).toBe(ERROR_CODES.PRODUCT_OVERFLOW);
+      }
+    });
+
+    it("regression test: rejects an operand outside the i128 range before multiplying", () => {
+      const result = applyStablecoinCentsMultiplier(OVER_I128, "2");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(ERROR_CODES.AMOUNT_OUT_OF_RANGE);
       }
     });
 
