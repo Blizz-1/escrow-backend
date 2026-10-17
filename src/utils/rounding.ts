@@ -38,7 +38,7 @@ export function normalizeRoundingMode(mode: RoundingModeInput): RoundingMode {
 /**
  * Divide `n` by `d` with the given rounding `mode`.
  *
- * Pure bigint arithmetic â€” no float intermediate. Sign handling:
+ * Pure bigint arithmetic — no float intermediate. Sign handling:
  * divisor sign is normalized (both operands negated), quotient truncates
  * toward zero, then the mode adjusts using the sign of the dividend.
  *
@@ -79,6 +79,3 @@ export function divRound(
   if (twiceR > D) return q + sign;
   return q % 2n === 0n ? q : q + sign;
 }
-
-/** Back-compat alias used by tax estimator imports. */
-export const roundIntegerDivisionCompat = divRound;

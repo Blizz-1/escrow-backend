@@ -267,4 +267,3 @@ export function reconcileTotals(reported: {
     balanced: credits.value - debits.value === net.value,
   };
 }
-

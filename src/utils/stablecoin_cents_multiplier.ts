@@ -7,6 +7,8 @@
  * configurable rounding policies (default: round-to-nearest-even / banker's rounding).
  */
 
+import { divRound } from "./rounding.js";
+
 /** Max decimal digits allowed for a single cents amount (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
 
@@ -15,8 +17,6 @@ export const CENTS_PER_UNIT = 100;
 
 /** Number of decimal places for stablecoin cents precision. */
 export const CENTS_DECIMALS = 2;
-
-import { divRound } from "./rounding.js";
 
 export const ERROR_CODES = {
   EXCESSIVE_DIGITS: "CENTS_EXCESSIVE_DIGITS",
@@ -544,4 +544,3 @@ export function toCents(
 
   return { ok: true, value: BigInt(combined) };
 }
-

@@ -6,13 +6,13 @@
  * would risk unsafe numeric overflow during multiplication and scaling.
  */
 
+import { divRound } from "./rounding.js";
+
 /** Max decimal digits allowed for a single amount/variable (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
 
 /** Max decimal digits allowed for an intermediate multiplication product before it is divided. */
 export const MAX_INTERMEDIATE_DIGITS = 28;
-
-import { divRound } from "./rounding.js";
 
 /** Default tax rate basis points scale (10,000 bps = 100%, 500 bps = 5%). */
 export const DEFAULT_TAX_SCALE = 10_000;
@@ -1192,4 +1192,3 @@ export function estimateBracketTax(
     roundingMode,
   };
 }
-

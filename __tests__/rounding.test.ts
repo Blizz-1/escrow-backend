@@ -1,7 +1,7 @@
-import { divRound } from "../src/utils/rounding";
-import { divideHalfEven } from "../src/utils/financial_report_math";
-import { divideRoundHalfEven } from "../src/utils/conversion_rate_scraper";
-import { roundIntegerDivision } from "../src/utils/tax_deduction_estimator";
+import { divRound } from "../src/utils/rounding.js";
+import { divideHalfEven } from "../src/utils/financial_report_math.js";
+import { divideRoundHalfEven } from "../src/utils/conversion_rate_scraper.js";
+import { roundIntegerDivision } from "../src/utils/tax_deduction_estimator.js";
 
 describe("unified rounding (issue #670)", () => {
   const cases: Array<{
@@ -21,6 +21,14 @@ describe("unified rounding (issue #670)", () => {
     { n: 7n, d: 3n, mode: "ceil", want: 3n, label: "ceil positive" },
     { n: 100n, d: 3n, mode: "half-even", want: 33n, label: "100/3 half-even" },
     { n: 200n, d: 3n, mode: "half-even", want: 67n, label: "200/3 half-even" },
+    { n: -7n, d: 2n, mode: "half-even", want: -4n, label: "negative half ties to even (-7/2)" },
+    { n: 5n, d: -2n, mode: "half-even", want: -2n, label: "negative divisor half-even" },
+    { n: -5n, d: 2n, mode: "half-up", want: -3n, label: "negative half-up rounds away" },
+    { n: -7n, d: 3n, mode: "truncate", want: -2n, label: "truncate negative toward zero" },
+    { n: 7n, d: 3n, mode: "floor", want: 2n, label: "floor positive" },
+    { n: -7n, d: 3n, mode: "ceil", want: -2n, label: "ceil negative" },
+    { n: 5n, d: 2n, mode: "round-to-nearest-even", want: 2n, label: "round-to-nearest-even alias" },
+    { n: 6n, d: 3n, mode: "half-even", want: 2n, label: "exact division" },
   ];
 
   it.each(cases)("$label: divRound($n, $d, $mode) = $want", ({ n, d, mode, want }) => {
