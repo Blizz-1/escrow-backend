@@ -6,6 +6,8 @@
  * would risk unsafe numeric overflow during multiplication and scaling.
  */
 
+import { divRound } from "./rounding.js";
+
 /** Max decimal digits allowed for a single amount/variable (below Number.MAX_SAFE_INTEGER). */
 export const MAX_SAFE_DIGITS = 15;
 
@@ -133,58 +135,10 @@ export function roundIntegerDivision(
   divisor: bigint,
   mode: RoundingPolicy = "truncate"
 ): bigint {
-  let N = numerator;
-  let D = divisor;
-
-  if (D < 0n) {
-    N = -N;
-    D = -D;
-  }
-
-  const q = N / D;
-  const r = N % D;
-
-  if (r === 0n) {
-    return q;
-  }
-
-  const sign = N >= 0n ? 1n : -1n;
-  const absR = r >= 0n ? r : -r;
-  const twiceR = 2n * absR;
-
-  if (mode === "truncate") {
-    // bigint division already truncates toward zero.
-    return q;
-  }
-
-  if (mode === "floor") {
-    return N < 0n ? q - 1n : q;
-  }
-
-  if (mode === "ceil") {
-    return N > 0n ? q + 1n : q;
-  }
-
-  if (mode === "half-up") {
-    if (twiceR >= D) {
-      return q + sign;
-    }
-    return q;
-  }
-
-  // mode is "half-even" or "round-to-nearest-even" (Banker's rounding)
-  if (twiceR < D) {
-    return q;
-  } else if (twiceR > D) {
-    return q + sign;
-  } else {
-    // Exact halfway tie
-    if (q % 2n === 0n) {
-      return q;
-    } else {
-      return q + sign;
-    }
-  }
+  // Issue #670: canonical implementation lives in ./rounding (divRound).
+  // This wrapper preserves the public signature including the
+  // "round-to-nearest-even" alias.
+  return divRound(numerator, divisor, mode);
 }
 
 export type TaxDeductionOutcome =
